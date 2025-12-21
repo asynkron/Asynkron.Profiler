@@ -1,5 +1,11 @@
 # Asynkron.Profiler
 
+Install globally:
+
+```bash
+dotnet tool install -g asynkron-profiler --prerelease
+```
+
 A lightweight CLI for CPU, memory allocation, and heap profiling of any .NET command using `dotnet-trace` and `dotnet-gcdump`.
 
 ## Prerequisites
@@ -10,6 +16,21 @@ A lightweight CLI for CPU, memory allocation, and heap profiling of any .NET com
 ```bash
 dotnet tool install -g dotnet-trace
 dotnet tool install -g dotnet-gcdump
+```
+
+## Profile your own .NET app
+
+Build your app in Release, then point the profiler at the compiled output (fastest and avoids profiling the build itself):
+
+```bash
+dotnet build -c Release
+asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
+```
+
+You can also profile `dotnet run`, but it will include build/restore overhead:
+
+```bash
+asynkron-profiler --cpu -- dotnet run -c Release ./MyApp.csproj
 ```
 
 ## Build
