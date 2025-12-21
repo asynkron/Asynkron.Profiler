@@ -863,12 +863,24 @@ IRenderable BuildCallTree(
         Style = new Style(Color.Grey),
         Guide = new CompactTreeGuide()
     };
-    var children = GetVisibleChildren(rootNode, includeRuntime, useSelfTime, maxWidth, siblingCutoffPercent);
+    var children = CallTreeFilters.GetVisibleChildren(
+        rootNode,
+        includeRuntime,
+        useSelfTime,
+        maxWidth,
+        siblingCutoffPercent,
+        IsRuntimeNoise);
     foreach (var child in children)
     {
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
-                     GetVisibleChildren(child, includeRuntime, useSelfTime, maxWidth, siblingCutoffPercent).Count == 0;
+                     CallTreeFilters.GetVisibleChildren(
+                         child,
+                         includeRuntime,
+                         useSelfTime,
+                         maxWidth,
+                         siblingCutoffPercent,
+                         IsRuntimeNoise).Count == 0;
         var childNode = tree.AddNode(FormatCallTreeLine(child, rootTotal, useSelfTime, isRoot: false, isLeaf));
         if (!isSpecialLeaf)
         {
@@ -906,14 +918,26 @@ void AddCallTreeChildren(
         return;
     }
 
-    var children = GetVisibleChildren(node, includeRuntime, useSelfTime, maxWidth, siblingCutoffPercent);
+    var children = CallTreeFilters.GetVisibleChildren(
+        node,
+        includeRuntime,
+        useSelfTime,
+        maxWidth,
+        siblingCutoffPercent,
+        IsRuntimeNoise);
 
     foreach (var child in children)
     {
         var nextDepth = depth + 1;
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var childChildren = !isSpecialLeaf && nextDepth <= maxDepth
-            ? GetVisibleChildren(child, includeRuntime, useSelfTime, maxWidth, siblingCutoffPercent)
+            ? CallTreeFilters.GetVisibleChildren(
+                child,
+                includeRuntime,
+                useSelfTime,
+                maxWidth,
+                siblingCutoffPercent,
+                IsRuntimeNoise)
             : Array.Empty<CallTreeNode>();
         var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
 
@@ -1079,23 +1103,6 @@ string NormalizeRootMode(string? rootMode)
     return rootMode.Trim().ToLowerInvariant();
 }
 
-IEnumerable<CallTreeNode> EnumerateVisibleChildren(CallTreeNode node, bool includeRuntime)
-{
-    foreach (var child in node.Children.Values)
-    {
-        if (includeRuntime || !IsRuntimeNoise(child.Name))
-        {
-            yield return child;
-            continue;
-        }
-
-        foreach (var grandChild in EnumerateVisibleChildren(child, includeRuntime))
-        {
-            yield return grandChild;
-        }
-    }
-}
-
 void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? allocationTotal)
 {
     if (entries.Count == 0)
@@ -1160,40 +1167,6 @@ string FormatBytes(long bytes)
     }
 
     return (bytes / (1024d * 1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " GB";
-}
-
-IReadOnlyList<CallTreeNode> GetVisibleChildren(
-    CallTreeNode node,
-    bool includeRuntime,
-    bool useSelfTime,
-    int maxWidth,
-    int siblingCutoffPercent)
-{
-    var ordered = EnumerateVisibleChildren(node, includeRuntime)
-        .OrderByDescending(child => GetCallTreeTime(child, useSelfTime))
-        .ToList();
-
-    if (ordered.Count == 0)
-    {
-        return ordered;
-    }
-
-    if (siblingCutoffPercent <= 0)
-    {
-        return ordered.Take(maxWidth).ToList();
-    }
-
-    var topTime = GetCallTreeTime(ordered[0], useSelfTime);
-    if (topTime <= 0)
-    {
-        return ordered.Take(maxWidth).ToList();
-    }
-
-    var minTime = topTime * siblingCutoffPercent / 100d;
-    return ordered
-        .Where(child => GetCallTreeTime(child, useSelfTime) >= minTime)
-        .Take(maxWidth)
-        .ToList();
 }
 
 string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
