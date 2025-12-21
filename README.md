@@ -24,7 +24,13 @@ Build your app in Release, then point the profiler at the compiled output (faste
 
 ```bash
 dotnet build -c Release
-asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --cpu -- ./bin/Release/<tfm>/MyApp
+```
+
+Framework-dependent apps can be profiled via `dotnet`:
+
+```bash
+asynkron-profiler --cpu -- dotnet ./bin/Release/<tfm>/MyApp.dll
 ```
 
 You can also profile `dotnet run`, but it will mostly capture the dotnet host (and build/restore). Use this only if you can't run the built output directly:
@@ -68,19 +74,19 @@ Memory allocation call tree:
 CPU profile a command:
 
 ```bash
-asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --cpu -- ./bin/Release/<tfm>/MyApp
 ```
 
 Memory allocation profile (GC allocation ticks + call tree):
 
 ```bash
-asynkron-profiler --memory -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --memory -- ./bin/Release/<tfm>/MyApp
 ```
 
 Heap snapshot:
 
 ```bash
-asynkron-profiler --heap -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --heap -- ./bin/Release/<tfm>/MyApp
 ```
 
 ### Render existing traces
@@ -139,17 +145,17 @@ Outputs are written to `profile-output/` in the current working directory.
 
 ```bash
 CPU profiling:
-asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
-asynkron-profiler --cpu --calltree-depth 5 -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --cpu -- ./bin/Release/<tfm>/MyApp
+asynkron-profiler --cpu --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp
 asynkron-profiler --cpu --input ./profile-output/app.speedscope.json
 
 Memory profiling:
-asynkron-profiler --memory -- ./bin/Release/net8.0/MyApp
-asynkron-profiler --memory --root "MyNamespace" -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --memory -- ./bin/Release/<tfm>/MyApp
+asynkron-profiler --memory --root "MyNamespace" -- ./bin/Release/<tfm>/MyApp
 asynkron-profiler --memory --input ./profile-output/app.nettrace
 
 Heap snapshot:
-asynkron-profiler --heap -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --heap -- ./bin/Release/<tfm>/MyApp
 asynkron-profiler --heap --input ./profile-output/app.gcdump
 
 Render existing traces:
@@ -160,7 +166,7 @@ asynkron-profiler --input ./profile-output/app.etlx --memory
 General:
 asynkron-profiler --help
 
-asynkron-profiler --cpu --calltree-depth 20 -- ./bin/Release/net8.0/MyApp
-asynkron-profiler --memory --root "MyNamespace" -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --cpu --calltree-depth 20 -- ./bin/Release/<tfm>/MyApp
+asynkron-profiler --memory --root "MyNamespace" -- ./bin/Release/<tfm>/MyApp
 asynkron-profiler --input ./profile-output/app.nettrace --cpu
 ```
