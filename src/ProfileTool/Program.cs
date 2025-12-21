@@ -39,6 +39,11 @@ IReadOnlyList<string> GetUsageExampleLines()
         "  asynkron-profiler --memory --root \"MyNamespace\" -- ./bin/Release/<tfm>/MyApp",
         "  asynkron-profiler --memory --input ./profile-output/app.nettrace",
         "",
+        "Lock contention profiling:",
+        "  asynkron-profiler --contention -- ./bin/Release/<tfm>/MyApp",
+        "  asynkron-profiler --contention --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp",
+        "  asynkron-profiler --contention --input ./profile-output/app.nettrace",
+        "",
         "Heap snapshot:",
         "  asynkron-profiler --heap -- ./bin/Release/<tfm>/MyApp",
         "  asynkron-profiler --heap --input ./profile-output/app.gcdump",
@@ -648,6 +653,218 @@ MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
         null);
 }
 
+ContentionProfileResult? ContentionProfileCommand(string[] command, string label)
+{
+    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    {
+        return null;
+    }
+
+    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.cont.nettrace");
+    var keywords = ((ulong)ClrTraceEventParser.Keywords.Contention).ToString("x", CultureInfo.InvariantCulture);
+    var provider = $"Microsoft-DotNETRuntime:0x{keywords}:4";
+
+    return AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .Start($"Collecting lock contention trace for [yellow]{label}[/]...", ctx =>
+        {
+            ctx.Status("Collecting trace data...");
+            var collectArgs = new List<string>
+            {
+                "collect",
+                "--providers",
+                provider,
+                "--output",
+                traceFile,
+                "--"
+            };
+            collectArgs.AddRange(command);
+            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+
+            if (!success || !File.Exists(traceFile))
+            {
+                AnsiConsole.MarkupLine($"[red]Contention trace failed:[/] {Markup.Escape(stderr)}");
+                return null;
+            }
+
+            ctx.Status("Analyzing contention trace...");
+            return AnalyzeContentionTrace(traceFile);
+        });
+}
+
+ContentionProfileResult? ContentionProfileFromInput(string inputPath, string label)
+{
+    if (!File.Exists(inputPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
+    if (extension != ".nettrace" && extension != ".etlx")
+    {
+        AnsiConsole.MarkupLine($"[red]Unsupported contention input:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    return AnalyzeContentionTrace(inputPath);
+}
+
+ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
+{
+    try
+    {
+        var frameTotals = new Dictionary<string, double>(StringComparer.Ordinal);
+        var frameCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var frameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
+        var framesList = new List<string>();
+        var callTreeRoot = new CallTreeNode(-1, "Total");
+        var pending = new Dictionary<int, Stack<(double StartTime, TraceCallStack? Stack)>>();
+        var totalWaitMs = 0d;
+        long totalCount = 0;
+
+        var etlxPath = traceFile;
+        if (traceFile.EndsWith(".nettrace", StringComparison.OrdinalIgnoreCase))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(traceFile);
+            var targetPath = Path.Combine(outputDir, $"{fileName}.etlx");
+            var options = new TraceLogOptions { ConversionLog = TextWriter.Null };
+            etlxPath = TraceLog.CreateFromEventPipeDataFile(traceFile, targetPath, options);
+        }
+
+        using var traceLog = TraceLog.OpenOrConvert(etlxPath, new TraceLogOptions { ConversionLog = TextWriter.Null });
+        using var source = traceLog.Events.GetSource();
+
+        source.Clr.ContentionStart += data =>
+        {
+            var stack = data.CallStack();
+            if (!pending.TryGetValue(data.ThreadID, out var stackList))
+            {
+                stackList = new Stack<(double StartTime, TraceCallStack? Stack)>();
+                pending[data.ThreadID] = stackList;
+            }
+
+            stackList.Push((data.TimeStampRelativeMSec, stack));
+        };
+
+        source.Clr.ContentionStop += data =>
+        {
+            var durationMs = data.DurationNs > 0
+                ? data.DurationNs / 1_000_000d
+                : 0d;
+            var stack = data.CallStack();
+            if (pending.TryGetValue(data.ThreadID, out var stackList) && stackList.Count > 0)
+            {
+                var entry = stackList.Pop();
+                if (stackList.Count == 0)
+                {
+                    pending.Remove(data.ThreadID);
+                }
+
+                if (durationMs <= 0)
+                {
+                    durationMs = data.TimeStampRelativeMSec - entry.StartTime;
+                }
+
+                stack ??= entry.Stack;
+            }
+
+            if (durationMs <= 0)
+            {
+                return;
+            }
+
+            var frames = EnumerateContentionFrames(stack).ToList();
+            if (frames.Count == 0)
+            {
+                frames.Add("Unknown");
+            }
+
+            frames.Reverse();
+
+            var node = callTreeRoot;
+            foreach (var frame in frames)
+            {
+                if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                {
+                    frameIdx = framesList.Count;
+                    framesList.Add(frame);
+                    frameIndices[frame] = frameIdx;
+                }
+
+                if (!node.Children.TryGetValue(frameIdx, out var child))
+                {
+                    child = new CallTreeNode(frameIdx, frame);
+                    node.Children[frameIdx] = child;
+                }
+
+                child.Total += durationMs;
+                if (child.Calls < int.MaxValue)
+                {
+                    child.Calls += 1;
+                }
+
+                frameTotals[frame] = frameTotals.TryGetValue(frame, out var total)
+                    ? total + durationMs
+                    : durationMs;
+                frameCounts[frame] = frameCounts.TryGetValue(frame, out var count)
+                    ? count + 1
+                    : 1;
+
+                node = child;
+            }
+
+            totalWaitMs += durationMs;
+            totalCount += 1;
+        };
+
+        source.Process();
+
+        callTreeRoot.Total = totalWaitMs;
+        callTreeRoot.Calls = totalCount > int.MaxValue ? int.MaxValue : (int)totalCount;
+
+        var topFunctions = frameTotals
+            .OrderByDescending(kv => kv.Value)
+            .Select(kv =>
+            {
+                frameCounts.TryGetValue(kv.Key, out var calls);
+                frameIndices.TryGetValue(kv.Key, out var frameIdx);
+                return new FunctionSample(kv.Key, kv.Value, calls, frameIdx);
+            })
+            .ToList();
+
+        return new ContentionProfileResult(topFunctions, callTreeRoot, totalWaitMs, totalCount);
+    }
+    catch (Exception ex)
+    {
+        AnsiConsole.MarkupLine($"[yellow]Contention trace parse failed:[/] {Markup.Escape(ex.Message)}");
+        return null;
+    }
+}
+
+IEnumerable<string> EnumerateContentionFrames(TraceCallStack? stack)
+{
+    if (stack == null)
+    {
+        yield break;
+    }
+
+    for (var current = stack; current != null; current = current.Caller)
+    {
+        var methodName = current.CodeAddress?.FullMethodName;
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            methodName = current.CodeAddress?.Method?.FullMethodName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(methodName))
+        {
+            yield return methodName;
+        }
+    }
+}
+
 AllocationCallTreeResult? AnalyzeAllocationTrace(string traceFile)
 {
     try
@@ -826,6 +1043,103 @@ void PrintMemoryResults(
     }
 }
 
+void PrintContentionResults(
+    ContentionProfileResult? results,
+    string profileName,
+    string? description,
+    string? rootFilter,
+    string? functionFilter,
+    bool includeRuntime,
+    int callTreeDepth,
+    int callTreeWidth,
+    string? callTreeRootMode,
+    int callTreeSiblingCutoffPercent)
+{
+    if (results == null)
+    {
+        AnsiConsole.MarkupLine("[red]No results to display[/]");
+        return;
+    }
+
+    PrintSection($"LOCK CONTENTION PROFILE: {profileName}");
+    if (!string.IsNullOrWhiteSpace(description))
+    {
+        AnsiConsole.MarkupLine($"[dim]{description}[/]");
+    }
+
+    var filteredAll = results.TopFunctions.Where(entry => MatchesFunctionFilter(entry.Name, functionFilter));
+    if (!includeRuntime)
+    {
+        filteredAll = filteredAll.Where(entry => !IsRuntimeNoise(entry.Name));
+    }
+    var filteredList = filteredAll.ToList();
+
+    AnsiConsole.WriteLine();
+    var topTitle = includeRuntime && string.IsNullOrWhiteSpace(functionFilter)
+        ? "Top Contended Functions (All)"
+        : "Top Contended Functions (Filtered)";
+    var table = new Table()
+        .Border(TableBorder.None)
+        .Title($"[bold]{topTitle}[/]")
+        .AddColumn(new TableColumn("[yellow]Wait (ms)[/]").RightAligned())
+        .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
+        .AddColumn(new TableColumn("[yellow]Function[/]"));
+
+    foreach (var entry in filteredList.Take(15))
+    {
+        var funcName = NameFormatter.FormatMethodDisplayName(entry.Name);
+        if (funcName.Length > 70)
+        {
+            funcName = funcName[..67] + "...";
+        }
+
+        var waitText = entry.TimeMs.ToString("F2", CultureInfo.InvariantCulture);
+        var countText = entry.Calls.ToString("N0", CultureInfo.InvariantCulture);
+        table.AddRow(
+            $"[green]{waitText}[/]",
+            $"[blue]{countText}[/]",
+            Markup.Escape(funcName));
+    }
+
+    AnsiConsole.Write(table);
+    var filteredOut = results.TopFunctions.Count - filteredList.Count;
+    if (filteredOut > 0)
+    {
+        var filteredOutText = filteredOut.ToString("N0", CultureInfo.InvariantCulture);
+        AnsiConsole.MarkupLine(
+            $"[dim]Filtered out {filteredOutText} runtime frames. Use --include-runtime to show all.[/]");
+    }
+    if (!string.IsNullOrWhiteSpace(functionFilter))
+    {
+        AnsiConsole.MarkupLine(
+            $"[dim]Filter: {Markup.Escape(functionFilter)} (use --filter to change).[/]");
+    }
+
+    AnsiConsole.WriteLine();
+    var summaryTable = new Table()
+        .Border(TableBorder.None)
+        .Title("[bold yellow]Summary[/]")
+        .HideHeaders()
+        .AddColumn("")
+        .AddColumn("");
+
+    var totalWaitText = results.TotalWaitMs.ToString("F2", CultureInfo.InvariantCulture);
+    var totalCountText = results.TotalCount.ToString("N0", CultureInfo.InvariantCulture);
+    summaryTable.AddRow("[bold]Total Wait[/]", $"[green]{totalWaitText} ms[/]");
+    summaryTable.AddRow("[bold]Total Contentions[/]", $"[blue]{totalCountText}[/]");
+    AnsiConsole.Write(summaryTable);
+
+    var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
+    AnsiConsole.Write(BuildContentionCallTree(
+        results,
+        resolvedRoot,
+        includeRuntime,
+        callTreeDepth,
+        callTreeWidth,
+        callTreeRootMode,
+        callTreeSiblingCutoffPercent));
+}
+
 void PrintAllocationCallTree(
     AllocationCallTreeResult results,
     string? rootFilter,
@@ -906,6 +1220,84 @@ IReadOnlyList<AllocationCallTreeNode> GetVisibleAllocationRoots(
         .Where(root => root.TotalBytes >= minBytes)
         .Take(maxWidth)
         .ToList();
+}
+
+IRenderable BuildContentionCallTree(
+    ContentionProfileResult results,
+    string? rootFilter,
+    bool includeRuntime,
+    int maxDepth,
+    int maxWidth,
+    string? rootMode,
+    int siblingCutoffPercent)
+{
+    var callTreeRoot = results.CallTreeRoot;
+    var totalTime = results.TotalWaitMs;
+    var title = "Call Tree (Wait Time)";
+    maxDepth = Math.Max(1, maxDepth);
+    maxWidth = Math.Max(1, maxWidth);
+    siblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
+
+    var rootNode = callTreeRoot;
+    var rootTotal = totalTime;
+    if (!string.IsNullOrWhiteSpace(rootFilter))
+    {
+        var matches = FindCallTreeMatches(callTreeRoot, rootFilter);
+        if (matches.Count > 0)
+        {
+            rootNode = SelectRootMatch(matches, includeRuntime, rootMode);
+            rootTotal = GetCallTreeTime(rootNode, useSelfTime: false);
+            title = $"{title} - root: {Markup.Escape(rootFilter)}";
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[yellow]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
+        }
+    }
+
+    var rootLabel = FormatCallTreeLine(rootNode, rootTotal, useSelfTime: false, isRoot: true);
+    var tree = new Tree(rootLabel)
+    {
+        Style = new Style(Color.Grey),
+        Guide = new CompactTreeGuide()
+    };
+    var children = CallTreeFilters.GetVisibleChildren(
+        rootNode,
+        includeRuntime,
+        useSelfTime: false,
+        maxWidth,
+        siblingCutoffPercent,
+        IsRuntimeNoise);
+    foreach (var child in children)
+    {
+        var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
+        var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
+                     CallTreeFilters.GetVisibleChildren(
+                         child,
+                         includeRuntime,
+                         useSelfTime: false,
+                         maxWidth,
+                         siblingCutoffPercent,
+                         IsRuntimeNoise).Count == 0;
+        var childNode = tree.AddNode(FormatCallTreeLine(child, rootTotal, useSelfTime: false, isRoot: false, isLeaf));
+        if (!isSpecialLeaf)
+        {
+            AddCallTreeChildren(
+                childNode,
+                child,
+                rootTotal,
+                useSelfTime: false,
+                includeRuntime,
+                2,
+                maxDepth,
+                maxWidth,
+                siblingCutoffPercent);
+        }
+    }
+
+    return new Rows(
+        new Markup($"[bold yellow]{title}[/]"),
+        tree);
 }
 
 IRenderable BuildAllocationCallTree(
@@ -1727,17 +2119,21 @@ string BuildInputLabel(string inputPath)
     return name;
 }
 
-void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, ref bool runHeap)
+void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, ref bool runHeap, ref bool runContention)
 {
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
     switch (extension)
     {
         case ".json":
+            runCpu = true;
+            break;
         case ".nettrace":
             runCpu = true;
+            runContention = true;
             break;
         case ".etlx":
             runMemory = true;
+            runContention = true;
             break;
         case ".gcdump":
         case ".txt":
@@ -1753,6 +2149,7 @@ void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, r
 // Command-line setup
 var cpuOption = new Option<bool>("--cpu", "Run CPU profiling only");
 var memoryOption = new Option<bool>("--memory", "Run memory profiling only");
+var contentionOption = new Option<bool>("--contention", "Run lock contention profiling only");
 var heapOption = new Option<bool>("--heap", "Capture heap snapshot");
 var callTreeRootOption = new Option<string?>("--root", "Filter call tree to a root method (substring match)");
 var callTreeDepthOption = new Option<int>("--calltree-depth", () => 30, "Maximum call tree depth (default: 30)");
@@ -1768,10 +2165,11 @@ var commandArg = new Argument<string[]>("command", () => Array.Empty<string>(),
     "Command to profile (pass after --)");
 commandArg.Arity = ArgumentArity.ZeroOrMore;
 
-var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Heap profiling for .NET commands")
+var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Contention/Heap profiling for .NET commands")
 {
     cpuOption,
     memoryOption,
+    contentionOption,
     heapOption,
     callTreeRootOption,
     callTreeDepthOption,
@@ -1792,6 +2190,7 @@ rootCommand.SetHandler(context =>
 {
     var cpu = context.ParseResult.GetValueForOption(cpuOption);
     var memory = context.ParseResult.GetValueForOption(memoryOption);
+    var contention = context.ParseResult.GetValueForOption(contentionOption);
     var heap = context.ParseResult.GetValueForOption(heapOption);
     var callTreeRoot = context.ParseResult.GetValueForOption(callTreeRootOption);
     var callTreeDepth = context.ParseResult.GetValueForOption(callTreeDepthOption);
@@ -1806,9 +2205,11 @@ rootCommand.SetHandler(context =>
     var command = context.ParseResult.GetValueForArgument(commandArg) ?? Array.Empty<string>();
 
     var hasInput = !string.IsNullOrWhiteSpace(inputPath);
-    var runCpu = cpu || (!cpu && !memory && !heap);
-    var runMemory = memory || (!cpu && !memory && !heap);
+    var hasExplicitModes = cpu || memory || heap || contention;
+    var runCpu = cpu || !hasExplicitModes;
+    var runMemory = memory || !hasExplicitModes;
     var runHeap = heap;
+    var runContention = contention;
 
     var resolver = new ProjectResolver(RunProcess);
     string label;
@@ -1817,9 +2218,9 @@ rootCommand.SetHandler(context =>
     {
         label = BuildInputLabel(inputPath!);
         description = inputPath!;
-        if (!cpu && !memory && !heap)
+        if (!hasExplicitModes)
         {
-            ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap);
+            ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap, ref runContention);
         }
     }
     else
@@ -1876,6 +2277,25 @@ rootCommand.SetHandler(context =>
             includeRuntime,
             callTreeDepth,
             callTreeWidth,
+            callTreeSiblingCutoff);
+    }
+
+    if (runContention)
+    {
+        Console.WriteLine($"{label} - contention");
+        var results = hasInput
+            ? ContentionProfileFromInput(inputPath!, label)
+            : ContentionProfileCommand(command, label);
+        PrintContentionResults(
+            results,
+            label,
+            description,
+            callTreeRoot,
+            functionFilter,
+            includeRuntime,
+            callTreeDepth,
+            callTreeWidth,
+            callTreeRootMode,
             callTreeSiblingCutoff);
     }
 
