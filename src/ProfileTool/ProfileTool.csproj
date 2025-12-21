@@ -8,9 +8,9 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>asynkron-profiler</ToolCommandName>
     <PackageId>asynkron-profiler</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.1.8</Version>
     <Authors>Asynkron</Authors>
-    <Description>Lightweight CLI for CPU, memory allocation, and heap profiling of .NET commands.</Description>
+    <Description>Lightweight CLI for CPU, memory allocation, lock contention, and heap profiling of .NET commands.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Asynkron/Asynkron.Profiler</RepositoryUrl>
     <PackageProjectUrl>https://github.com/Asynkron/Asynkron.Profiler</PackageProjectUrl>
