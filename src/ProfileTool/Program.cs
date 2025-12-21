@@ -16,6 +16,27 @@ void PrintSection(string text)
     Console.WriteLine(text);
 }
 
+void PrintUsageExamples()
+{
+    Console.WriteLine("Examples:");
+    Console.WriteLine();
+    Console.WriteLine("CPU profiling:");
+    Console.WriteLine("  asynkron-profiler --cpu -- dotnet run MyProject.sln");
+    Console.WriteLine("  asynkron-profiler --cpu --calltree-depth 5 -- dotnet run MyProject.sln");
+    Console.WriteLine("  asynkron-profiler --cpu --input ./profile-output/app.speedscope.json");
+    Console.WriteLine();
+    Console.WriteLine("Memory profiling:");
+    Console.WriteLine("  asynkron-profiler --memory -- dotnet test");
+    Console.WriteLine("  asynkron-profiler --memory --input ./profile-output/app.nettrace");
+    Console.WriteLine();
+    Console.WriteLine("Heap snapshot:");
+    Console.WriteLine("  asynkron-profiler --heap -- dotnet run MyProject.sln");
+    Console.WriteLine("  asynkron-profiler --heap --input ./profile-output/app.gcdump");
+    Console.WriteLine();
+    Console.WriteLine("General:");
+    Console.WriteLine("  asynkron-profiler --help");
+}
+
 (bool Success, string StdOut, string StdErr) RunProcess(
     string fileName,
     IEnumerable<string> args,
@@ -1680,7 +1701,7 @@ var commandArg = new Argument<string[]>("command", () => Array.Empty<string>(),
     "Command to profile (pass after --)");
 commandArg.Arity = ArgumentArity.ZeroOrMore;
 
-var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory profiling for .NET commands")
+var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Heap profiling for .NET commands")
 {
     cpuOption,
     memoryOption,
@@ -1736,7 +1757,7 @@ rootCommand.SetHandler(context =>
         if (command.Length == 0)
         {
             AnsiConsole.MarkupLine("[red]No command provided.[/]");
-            AnsiConsole.MarkupLine("[dim]Example: asynkron-profiler --cpu -- dotnet run MyProject.sln[/]");
+            PrintUsageExamples();
             return;
         }
 
