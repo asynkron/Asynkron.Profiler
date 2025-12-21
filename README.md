@@ -6,7 +6,7 @@ Install globally:
 dotnet tool install -g asynkron-profiler --prerelease
 ```
 
-A lightweight CLI for CPU, memory allocation, lock contention, and heap profiling of any .NET command using `dotnet-trace` and `dotnet-gcdump`.
+A lightweight CLI for CPU, memory allocation, exception, lock contention, and heap profiling of any .NET command using `dotnet-trace` and `dotnet-gcdump`.
 
 This is a profiler frontend/CLI UI built for humans and automation (including AI agents). It outputs plain‑text, structured summaries so the same insights you’d inspect in GUI tools like dotMemory or dotTrace are available to scripts and agent workflows.
 
@@ -92,6 +92,12 @@ Memory allocation profile (GC allocation ticks + call tree):
 asynkron-profiler --memory -- ./bin/Release/<tfm>/MyApp
 ```
 
+Exception profile:
+
+```bash
+asynkron-profiler --exception -- ./bin/Release/<tfm>/MyApp
+```
+
 Lock contention profile:
 
 ```bash
@@ -110,6 +116,7 @@ You can render existing files without re-running the app. Supported inputs:
 
 - CPU: `.speedscope.json` or `.nettrace` (will convert to Speedscope)
 - Memory: `.nettrace` or `.etlx`
+- Exceptions: `.nettrace` or `.etlx`
 - Contention: `.nettrace` or `.etlx`
 - Heap: `.gcdump` (or a `dotnet-gcdump report` text file)
 
@@ -128,6 +135,9 @@ asynkron-profiler --input /path/to/trace.etlx --memory
 # Render contention from an .etlx
 asynkron-profiler --input /path/to/trace.etlx --contention
 
+# Render exceptions from an .etlx
+asynkron-profiler --input /path/to/trace.etlx --exception
+
 # Render heap dump
 asynkron-profiler --input /path/to/heap.gcdump --heap
 
@@ -142,6 +152,7 @@ Outputs are written to `profile-output/` in the current working directory.
 
 - `--cpu` CPU profile only
 - `--memory` memory allocation profile only
+- `--exception` exception profile only
 - `--contention` lock contention profile only
 - `--heap` heap snapshot only
 - `--root <text>` root the call tree at the first matching method
@@ -150,6 +161,7 @@ Outputs are written to `profile-output/` in the current working directory.
 - `--calltree-self` include self-time tree
 - `--calltree-sibling-cutoff <n>` hide siblings below X% of the top sibling (default: 5)
 - `--filter <text>` filter function tables by substring
+- `--exception-type <text>` filter exception tables and call trees by exception type
 - `--include-runtime` include runtime/process frames
 - `--input <path>` render existing `nettrace`, `speedscope.json`, `etlx`, or `gcdump` files
 - `--tfm <tfm>` target framework when profiling a `.csproj` or `.sln`
@@ -175,6 +187,11 @@ asynkron-profiler --memory -- ./bin/Release/<tfm>/MyApp
 asynkron-profiler --memory --root "MyNamespace" -- ./bin/Release/<tfm>/MyApp
 asynkron-profiler --memory --input ./profile-output/app.nettrace
 
+Exception profiling:
+asynkron-profiler --exception -- ./bin/Release/<tfm>/MyApp
+asynkron-profiler --exception --exception-type "InvalidOperation" -- ./bin/Release/<tfm>/MyApp
+asynkron-profiler --exception --input ./profile-output/app.nettrace
+
 Contention profiling:
 asynkron-profiler --contention -- ./bin/Release/<tfm>/MyApp
 asynkron-profiler --contention --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp
@@ -189,6 +206,7 @@ asynkron-profiler --input ./profile-output/app.nettrace
 asynkron-profiler --input ./profile-output/app.speedscope.json --cpu
 asynkron-profiler --input ./profile-output/app.etlx --memory
 asynkron-profiler --input ./profile-output/app.etlx --contention
+asynkron-profiler --input ./profile-output/app.etlx --exception
 
 General:
 asynkron-profiler --help

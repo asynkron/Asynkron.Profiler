@@ -39,6 +39,12 @@ IReadOnlyList<string> GetUsageExampleLines()
         "  asynkron-profiler --memory --root \"MyNamespace\" -- ./bin/Release/<tfm>/MyApp",
         "  asynkron-profiler --memory --input ./profile-output/app.nettrace",
         "",
+        "Exception profiling:",
+        "  asynkron-profiler --exception -- ./bin/Release/<tfm>/MyApp",
+        "  asynkron-profiler --exception --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp",
+        "  asynkron-profiler --exception --exception-type \"InvalidOperation\" -- ./bin/Release/<tfm>/MyApp",
+        "  asynkron-profiler --exception --input ./profile-output/app.nettrace",
+        "",
         "Lock contention profiling:",
         "  asynkron-profiler --contention -- ./bin/Release/<tfm>/MyApp",
         "  asynkron-profiler --contention --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp",
@@ -52,6 +58,7 @@ IReadOnlyList<string> GetUsageExampleLines()
         "  asynkron-profiler --input ./profile-output/app.nettrace",
         "  asynkron-profiler --input ./profile-output/app.speedscope.json --cpu",
         "  asynkron-profiler --input ./profile-output/app.etlx --memory",
+        "  asynkron-profiler --input ./profile-output/app.nettrace --exception",
         "",
         "General:",
         "  asynkron-profiler --help"
@@ -653,6 +660,325 @@ MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
         null);
 }
 
+ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
+{
+    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    {
+        return null;
+    }
+
+    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.exc.nettrace");
+    var keywordsValue = ClrTraceEventParser.Keywords.Exception;
+    var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
+    var provider = $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
+
+    return AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .Start($"Collecting exception trace for [yellow]{label}[/]...", ctx =>
+        {
+            ctx.Status("Collecting trace data...");
+            var collectArgs = new List<string>
+            {
+                "collect",
+                "--providers",
+                provider,
+                "--output",
+                traceFile,
+                "--"
+            };
+            collectArgs.AddRange(command);
+            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+
+            if (!success || !File.Exists(traceFile))
+            {
+                AnsiConsole.MarkupLine($"[red]Exception trace failed:[/] {Markup.Escape(stderr)}");
+                return null;
+            }
+
+            ctx.Status("Analyzing exception trace...");
+            return AnalyzeExceptionTrace(traceFile);
+        });
+}
+
+ExceptionProfileResult? ExceptionProfileFromInput(string inputPath, string label)
+{
+    if (!File.Exists(inputPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
+    if (extension != ".nettrace" && extension != ".etlx")
+    {
+        AnsiConsole.MarkupLine($"[red]Unsupported exception input:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    return AnalyzeExceptionTrace(inputPath);
+}
+
+ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
+{
+    try
+    {
+        var exceptionCounts = new Dictionary<string, long>(StringComparer.Ordinal);
+        var typeDetails = new Dictionary<string, ExceptionTypeDetails>(StringComparer.Ordinal);
+        var typeThrowRoots = new Dictionary<string, CallTreeNode>(StringComparer.Ordinal);
+        var typeThrowCounts = new Dictionary<string, long>(StringComparer.Ordinal);
+        var typeCatchRoots = new Dictionary<string, CallTreeNode>(StringComparer.Ordinal);
+        var typeCatchCounts = new Dictionary<string, long>(StringComparer.Ordinal);
+        var typeCatchSites = new Dictionary<string, Dictionary<string, long>>(StringComparer.Ordinal);
+        var throwFrameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
+        var throwFramesList = new List<string>();
+        var throwRoot = new CallTreeNode(-1, "Total");
+        var catchFrameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
+        var catchFramesList = new List<string>();
+        var catchRoot = new CallTreeNode(-1, "Total");
+        var catchSites = new Dictionary<string, long>(StringComparer.Ordinal);
+        long totalThrown = 0;
+        long totalCaught = 0;
+
+        var etlxPath = traceFile;
+        if (traceFile.EndsWith(".nettrace", StringComparison.OrdinalIgnoreCase))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(traceFile);
+            var targetPath = Path.Combine(outputDir, $"{fileName}.etlx");
+            var options = new TraceLogOptions { ConversionLog = TextWriter.Null };
+            etlxPath = TraceLog.CreateFromEventPipeDataFile(traceFile, targetPath, options);
+        }
+
+        using var traceLog = TraceLog.OpenOrConvert(etlxPath, new TraceLogOptions { ConversionLog = TextWriter.Null });
+        using var source = traceLog.Events.GetSource();
+
+        var sawTypedThrow = false;
+        var sawTypedCatch = false;
+
+        void RecordThrow(TraceEvent data)
+        {
+            var typeName = GetExceptionTypeName(data);
+            exceptionCounts[typeName] = exceptionCounts.TryGetValue(typeName, out var count)
+                ? count + 1
+                : 1;
+            totalThrown += 1;
+            RecordExceptionStack(
+                data.CallStack(),
+                throwRoot,
+                throwFrameIndices,
+                throwFramesList);
+
+            typeThrowCounts[typeName] = typeThrowCounts.TryGetValue(typeName, out var typeCount)
+                ? typeCount + 1
+                : 1;
+            if (!typeThrowRoots.TryGetValue(typeName, out var typeRoot))
+            {
+                typeRoot = new CallTreeNode(-1, "Total");
+                typeThrowRoots[typeName] = typeRoot;
+            }
+
+            RecordExceptionStack(
+                data.CallStack(),
+                typeRoot,
+                throwFrameIndices,
+                throwFramesList);
+        }
+
+        void RecordCatch(TraceEvent data)
+        {
+            totalCaught += 1;
+            RecordExceptionStack(
+                data.CallStack(),
+                catchRoot,
+                catchFrameIndices,
+                catchFramesList);
+
+            var typeName = GetExceptionTypeName(data);
+            typeCatchCounts[typeName] = typeCatchCounts.TryGetValue(typeName, out var typeCount)
+                ? typeCount + 1
+                : 1;
+            if (!typeCatchRoots.TryGetValue(typeName, out var typeRoot))
+            {
+                typeRoot = new CallTreeNode(-1, "Total");
+                typeCatchRoots[typeName] = typeRoot;
+            }
+
+            RecordExceptionStack(
+                data.CallStack(),
+                typeRoot,
+                catchFrameIndices,
+                catchFramesList);
+
+            var catchSite = GetTopFrameName(data.CallStack()) ?? "Unknown";
+            catchSites[catchSite] = catchSites.TryGetValue(catchSite, out var count)
+                ? count + 1
+                : 1;
+
+            if (!typeCatchSites.TryGetValue(typeName, out var typeSites))
+            {
+                typeSites = new Dictionary<string, long>(StringComparer.Ordinal);
+                typeCatchSites[typeName] = typeSites;
+            }
+
+            typeSites[catchSite] = typeSites.TryGetValue(catchSite, out var siteCount)
+                ? siteCount + 1
+                : 1;
+        }
+
+        source.Clr.ExceptionStart += data =>
+        {
+            sawTypedThrow = true;
+            RecordThrow(data);
+        };
+
+        source.Clr.ExceptionCatchStart += data =>
+        {
+            sawTypedCatch = true;
+            RecordCatch(data);
+        };
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ExceptionStart",
+            data =>
+            {
+                if (!sawTypedThrow)
+                {
+                    RecordThrow(data);
+                }
+            });
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ExceptionThrown",
+            data =>
+            {
+                if (!sawTypedThrow)
+                {
+                    RecordThrow(data);
+                }
+            });
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ExceptionCatchStart",
+            data =>
+            {
+                if (!sawTypedCatch)
+                {
+                    RecordCatch(data);
+                }
+            });
+
+        source.Process();
+
+        throwRoot.Total = totalThrown;
+        throwRoot.Calls = totalThrown > int.MaxValue ? int.MaxValue : (int)totalThrown;
+
+        CallTreeNode? catchRootResult = null;
+        if (totalCaught > 0)
+        {
+            catchRoot.Total = totalCaught;
+            catchRoot.Calls = totalCaught > int.MaxValue ? int.MaxValue : (int)totalCaught;
+            catchRootResult = catchRoot;
+        }
+
+        foreach (var (typeName, count) in typeThrowCounts)
+        {
+            if (!typeThrowRoots.TryGetValue(typeName, out var typeRoot))
+            {
+                typeRoot = new CallTreeNode(-1, "Total");
+                typeThrowRoots[typeName] = typeRoot;
+            }
+
+            typeRoot.Total = count;
+            typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
+        }
+
+        foreach (var (typeName, count) in typeCatchCounts)
+        {
+            if (!typeCatchRoots.TryGetValue(typeName, out var typeRoot))
+            {
+                typeRoot = new CallTreeNode(-1, "Total");
+                typeCatchRoots[typeName] = typeRoot;
+            }
+
+            typeRoot.Total = count;
+            typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
+        }
+
+        foreach (var (typeName, thrownCount) in typeThrowCounts)
+        {
+            typeCatchCounts.TryGetValue(typeName, out var caughtCount);
+            typeThrowRoots.TryGetValue(typeName, out var throwRootNode);
+            typeCatchRoots.TryGetValue(typeName, out var catchRootNode);
+            typeCatchSites.TryGetValue(typeName, out var sites);
+            var siteList = (IReadOnlyList<ExceptionSiteSample>)(sites == null
+                ? Array.Empty<ExceptionSiteSample>()
+                : sites.OrderByDescending(kv => kv.Value)
+                    .Select(kv => new ExceptionSiteSample(kv.Key, kv.Value))
+                    .ToList());
+
+            if (throwRootNode != null)
+            {
+                typeDetails[typeName] = new ExceptionTypeDetails(
+                    thrownCount,
+                    throwRootNode,
+                    caughtCount,
+                    catchRootNode,
+                    siteList);
+            }
+        }
+
+        foreach (var (typeName, caughtCount) in typeCatchCounts)
+        {
+            if (typeDetails.ContainsKey(typeName))
+            {
+                continue;
+            }
+
+            typeCatchRoots.TryGetValue(typeName, out var catchRootNode);
+            typeCatchSites.TryGetValue(typeName, out var sites);
+            var siteList = (IReadOnlyList<ExceptionSiteSample>)(sites == null
+                ? Array.Empty<ExceptionSiteSample>()
+                : sites.OrderByDescending(kv => kv.Value)
+                    .Select(kv => new ExceptionSiteSample(kv.Key, kv.Value))
+                    .ToList());
+
+            typeDetails[typeName] = new ExceptionTypeDetails(
+                0,
+                new CallTreeNode(-1, "Total"),
+                caughtCount,
+                catchRootNode,
+                siteList);
+        }
+
+        var exceptionTypes = exceptionCounts
+            .OrderByDescending(kv => kv.Value)
+            .Select(kv => new ExceptionTypeSample(kv.Key, kv.Value))
+            .ToList();
+
+        var catchSiteList = catchSites
+            .OrderByDescending(kv => kv.Value)
+            .Select(kv => new ExceptionSiteSample(kv.Key, kv.Value))
+            .ToList();
+
+        return new ExceptionProfileResult(
+            exceptionTypes,
+            throwRoot,
+            totalThrown,
+            typeDetails,
+            catchSiteList,
+            catchRootResult,
+            totalCaught);
+    }
+    catch (Exception ex)
+    {
+        AnsiConsole.MarkupLine($"[yellow]Exception trace parse failed:[/] {Markup.Escape(ex.Message)}");
+        return null;
+    }
+}
+
 ContentionProfileResult? ContentionProfileCommand(string[] command, string label)
 {
     if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
@@ -921,6 +1247,114 @@ IEnumerable<string> EnumerateContentionFrames(TraceCallStack? stack)
     }
 }
 
+void RecordExceptionStack(
+    TraceCallStack? stack,
+    CallTreeNode root,
+    Dictionary<string, int> frameIndices,
+    List<string> framesList)
+{
+    var frames = EnumerateExceptionFrames(stack).ToList();
+    if (frames.Count == 0)
+    {
+        frames.Add("Unknown");
+    }
+
+    frames.Reverse();
+    var node = root;
+    foreach (var frame in frames)
+    {
+        if (!frameIndices.TryGetValue(frame, out var frameIdx))
+        {
+            frameIdx = framesList.Count;
+            framesList.Add(frame);
+            frameIndices[frame] = frameIdx;
+        }
+
+        if (!node.Children.TryGetValue(frameIdx, out var child))
+        {
+            child = new CallTreeNode(frameIdx, frame);
+            node.Children[frameIdx] = child;
+        }
+
+        child.Total += 1;
+        if (child.Calls < int.MaxValue)
+        {
+            child.Calls += 1;
+        }
+
+        node = child;
+    }
+}
+
+IEnumerable<string> EnumerateExceptionFrames(TraceCallStack? stack)
+{
+    if (stack == null)
+    {
+        yield break;
+    }
+
+    for (var current = stack; current != null; current = current.Caller)
+    {
+        var methodName = current.CodeAddress?.FullMethodName;
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            methodName = current.CodeAddress?.Method?.FullMethodName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(methodName))
+        {
+            yield return methodName;
+        }
+    }
+}
+
+string? GetTopFrameName(TraceCallStack? stack)
+{
+    if (stack == null)
+    {
+        return null;
+    }
+
+    var methodName = stack.CodeAddress?.FullMethodName;
+    if (string.IsNullOrWhiteSpace(methodName))
+    {
+        methodName = stack.CodeAddress?.Method?.FullMethodName;
+    }
+
+    return string.IsNullOrWhiteSpace(methodName) ? null : methodName;
+}
+
+string GetExceptionTypeName(TraceEvent data)
+{
+    var typeName = TryGetPayloadString(data, "ExceptionTypeName", "ExceptionType", "TypeName");
+    if (string.IsNullOrWhiteSpace(typeName))
+    {
+        try
+        {
+            foreach (var payloadName in data.PayloadNames ?? Array.Empty<string>())
+            {
+                if (!payloadName.Contains("ExceptionType", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var value = data.PayloadByName(payloadName);
+                if (value != null)
+                {
+                    typeName = value.ToString();
+                    break;
+                }
+            }
+        }
+        catch
+        {
+            typeName = null;
+        }
+    }
+
+    return string.IsNullOrWhiteSpace(typeName) ? "Unknown" : typeName;
+}
+
 double TryGetPayloadDurationMs(TraceEvent data)
 {
     var durationNs = TryGetPayloadLong(data, "DurationNs")
@@ -932,6 +1366,27 @@ double TryGetPayloadDurationMs(TraceEvent data)
     }
 
     return 0d;
+}
+
+string? TryGetPayloadString(TraceEvent data, params string[] names)
+{
+    foreach (var name in names)
+    {
+        try
+        {
+            var value = data.PayloadByName(name);
+            if (value != null)
+            {
+                return value.ToString();
+            }
+        }
+        catch
+        {
+            // Ignore missing payloads.
+        }
+    }
+
+    return null;
 }
 
 long? TryGetPayloadLong(TraceEvent data, string name)
@@ -1138,6 +1593,167 @@ void PrintMemoryResults(
             callTreeDepth,
             callTreeWidth,
             callTreeSiblingCutoffPercent);
+    }
+}
+
+void PrintExceptionResults(
+    ExceptionProfileResult? results,
+    string profileName,
+    string? description,
+    string? rootFilter,
+    string? exceptionTypeFilter,
+    string? functionFilter,
+    bool includeRuntime,
+    int callTreeDepth,
+    int callTreeWidth,
+    string? callTreeRootMode,
+    int callTreeSiblingCutoffPercent)
+{
+    if (results == null)
+    {
+        AnsiConsole.MarkupLine("[red]No results to display[/]");
+        return;
+    }
+
+    PrintSection($"EXCEPTION PROFILE: {profileName}");
+    if (!string.IsNullOrWhiteSpace(description))
+    {
+        AnsiConsole.MarkupLine($"[dim]{description}[/]");
+    }
+
+    var selectedType = SelectExceptionType(results.ExceptionTypes, exceptionTypeFilter);
+    var filteredExceptionTypes = FilterExceptionTypes(results.ExceptionTypes, exceptionTypeFilter);
+    var hasTypeFilter = !string.IsNullOrWhiteSpace(exceptionTypeFilter);
+    ExceptionTypeDetails? selectedDetails = null;
+    if (!string.IsNullOrWhiteSpace(selectedType) &&
+        results.TypeDetails.TryGetValue(selectedType, out var details))
+    {
+        selectedDetails = details;
+    }
+
+    if (hasTypeFilter && filteredExceptionTypes.Count == 0)
+    {
+        AnsiConsole.MarkupLine(
+            $"[yellow]No exception types matched '{Markup.Escape(exceptionTypeFilter!)}'. Showing full results.[/]");
+        filteredExceptionTypes = results.ExceptionTypes;
+        selectedType = null;
+        selectedDetails = null;
+    }
+    else if (hasTypeFilter && !string.IsNullOrWhiteSpace(selectedType))
+    {
+        AnsiConsole.MarkupLine($"[dim]Exception type filter: {Markup.Escape(selectedType)}[/]");
+    }
+
+    if (filteredExceptionTypes.Count == 0)
+    {
+        AnsiConsole.MarkupLine("[yellow]No exception events captured.[/]");
+    }
+    else
+    {
+        AnsiConsole.WriteLine();
+        var table = new Table()
+            .Border(TableBorder.None)
+            .Title("[bold]Top Exceptions (Thrown)[/]")
+            .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
+            .AddColumn(new TableColumn("[yellow]Exception[/]"));
+
+        foreach (var entry in filteredExceptionTypes.Take(15))
+        {
+            var typeName = NameFormatter.FormatTypeDisplayName(entry.Type);
+            if (typeName.Length > 70)
+            {
+                typeName = typeName[..67] + "...";
+            }
+
+            var countText = entry.Count.ToString("N0", CultureInfo.InvariantCulture);
+            table.AddRow($"[blue]{countText}[/]", Markup.Escape(typeName));
+        }
+
+        AnsiConsole.Write(table);
+    }
+
+    var summaryThrown = selectedDetails?.Thrown ?? results.TotalThrown;
+    var summaryCaught = selectedDetails?.Caught ?? results.TotalCaught;
+    var summaryTable = new Table()
+        .Border(TableBorder.None)
+        .Title("[bold yellow]Summary[/]")
+        .HideHeaders()
+        .AddColumn("")
+        .AddColumn("");
+
+    var thrownText = summaryThrown.ToString("N0", CultureInfo.InvariantCulture);
+    summaryTable.AddRow("[bold]Thrown[/]", $"[green]{thrownText}[/]");
+    if (summaryCaught > 0)
+    {
+        var caughtText = summaryCaught.ToString("N0", CultureInfo.InvariantCulture);
+        summaryTable.AddRow("[bold]Caught[/]", $"[blue]{caughtText}[/]");
+    }
+
+    AnsiConsole.WriteLine();
+    AnsiConsole.Write(summaryTable);
+
+    if (summaryThrown > 0)
+    {
+        var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
+        AnsiConsole.Write(BuildExceptionCallTree(
+            selectedDetails?.ThrowRoot ?? results.ThrowCallTreeRoot,
+            summaryThrown,
+            "Call Tree (Thrown Exceptions)",
+            selectedType != null ? NameFormatter.FormatTypeDisplayName(selectedType) : null,
+            resolvedRoot,
+            includeRuntime,
+            callTreeDepth,
+            callTreeWidth,
+            callTreeRootMode,
+            callTreeSiblingCutoffPercent));
+    }
+
+    var catchSites = selectedDetails?.CatchSites ?? results.CatchSites;
+    var catchRoot = selectedDetails?.CatchRoot ?? results.CatchCallTreeRoot;
+    if (summaryCaught > 0 && catchRoot != null)
+    {
+        var filteredCatchSites = catchSites.Where(entry => MatchesFunctionFilter(entry.Name, functionFilter));
+        if (!includeRuntime)
+        {
+            filteredCatchSites = filteredCatchSites.Where(entry => !IsRuntimeNoise(entry.Name));
+        }
+        var catchList = filteredCatchSites.ToList();
+        if (catchList.Count > 0)
+        {
+            AnsiConsole.WriteLine();
+            var catchTable = new Table()
+                .Border(TableBorder.None)
+                .Title("[bold]Top Catch Sites[/]")
+                .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
+                .AddColumn(new TableColumn("[yellow]Function[/]"));
+
+            foreach (var entry in catchList.Take(15))
+            {
+                var funcName = NameFormatter.FormatMethodDisplayName(entry.Name);
+                if (funcName.Length > 70)
+                {
+                    funcName = funcName[..67] + "...";
+                }
+
+                var countText = entry.Count.ToString("N0", CultureInfo.InvariantCulture);
+                catchTable.AddRow($"[blue]{countText}[/]", Markup.Escape(funcName));
+            }
+
+            AnsiConsole.Write(catchTable);
+        }
+
+        var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
+        AnsiConsole.Write(BuildExceptionCallTree(
+            catchRoot,
+            summaryCaught,
+            "Call Tree (Catch Sites)",
+            selectedType != null ? NameFormatter.FormatTypeDisplayName(selectedType) : null,
+            resolvedRoot,
+            includeRuntime,
+            callTreeDepth,
+            callTreeWidth,
+            callTreeRootMode,
+            callTreeSiblingCutoffPercent));
     }
 }
 
@@ -1385,6 +2001,83 @@ IRenderable BuildContentionCallTree(
                 child,
                 rootTotal,
                 useSelfTime: false,
+                includeRuntime,
+                2,
+                maxDepth,
+                maxWidth,
+                siblingCutoffPercent);
+        }
+    }
+
+    return new Rows(
+        new Markup($"[bold yellow]{title}[/]"),
+        tree);
+}
+
+IRenderable BuildExceptionCallTree(
+    CallTreeNode callTreeRoot,
+    long totalCount,
+    string title,
+    string? rootLabelOverride,
+    string? rootFilter,
+    bool includeRuntime,
+    int maxDepth,
+    int maxWidth,
+    string? rootMode,
+    int siblingCutoffPercent)
+{
+    maxDepth = Math.Max(1, maxDepth);
+    maxWidth = Math.Max(1, maxWidth);
+    siblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
+
+    var rootNode = callTreeRoot;
+    var rootTotal = (double)totalCount;
+    if (!string.IsNullOrWhiteSpace(rootFilter))
+    {
+        var matches = FindCallTreeMatches(callTreeRoot, rootFilter);
+        if (matches.Count > 0)
+        {
+            rootNode = SelectRootMatch(matches, includeRuntime, rootMode);
+            rootTotal = GetCallTreeTime(rootNode, useSelfTime: false);
+            title = $"{title} - root: {Markup.Escape(rootFilter)}";
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[yellow]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
+        }
+    }
+
+    var rootLabel = FormatExceptionCallTreeLine(rootNode, rootTotal, isRoot: true, rootLabelOverride);
+    var tree = new Tree(rootLabel)
+    {
+        Style = new Style(Color.Grey),
+        Guide = new CompactTreeGuide()
+    };
+    var children = CallTreeFilters.GetVisibleChildren(
+        rootNode,
+        includeRuntime,
+        useSelfTime: false,
+        maxWidth,
+        siblingCutoffPercent,
+        IsRuntimeNoise);
+    foreach (var child in children)
+    {
+        var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
+        var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
+                     CallTreeFilters.GetVisibleChildren(
+                         child,
+                         includeRuntime,
+                         useSelfTime: false,
+                         maxWidth,
+                         siblingCutoffPercent,
+                         IsRuntimeNoise).Count == 0;
+        var childNode = tree.AddNode(FormatExceptionCallTreeLine(child, rootTotal, isRoot: false, rootLabelOverride: null, isLeaf));
+        if (!isSpecialLeaf)
+        {
+            AddExceptionCallTreeChildren(
+                childNode,
+                child,
+                rootTotal,
                 includeRuntime,
                 2,
                 maxDepth,
@@ -1692,6 +2385,55 @@ void AddCallTreeChildren(
     }
 }
 
+void AddExceptionCallTreeChildren(
+    TreeNode parent,
+    CallTreeNode node,
+    double totalCount,
+    bool includeRuntime,
+    int depth,
+    int maxDepth,
+    int maxWidth,
+    int siblingCutoffPercent)
+{
+    if (depth > maxDepth)
+    {
+        return;
+    }
+
+    var children = CallTreeFilters.GetVisibleChildren(
+        node,
+        includeRuntime,
+        useSelfTime: false,
+        maxWidth,
+        siblingCutoffPercent,
+        IsRuntimeNoise);
+    foreach (var child in children)
+    {
+        var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
+        var isLeaf = isSpecialLeaf || depth + 1 > maxDepth ||
+                     CallTreeFilters.GetVisibleChildren(
+                         child,
+                         includeRuntime,
+                         useSelfTime: false,
+                         maxWidth,
+                         siblingCutoffPercent,
+                         IsRuntimeNoise).Count == 0;
+        var childNode = parent.AddNode(FormatExceptionCallTreeLine(child, totalCount, isRoot: false, rootLabelOverride: null, isLeaf));
+        if (!isSpecialLeaf)
+        {
+            AddExceptionCallTreeChildren(
+                childNode,
+                child,
+                totalCount,
+                includeRuntime,
+                depth + 1,
+                maxDepth,
+                maxWidth,
+                siblingCutoffPercent);
+        }
+    }
+}
+
 string FormatCallTreeLine(
     CallTreeNode node,
     double totalTime,
@@ -1718,6 +2460,31 @@ string FormatCallTreeLine(
     var nameText = FormatCallTreeName(displayName, matchName, isLeaf);
 
     return $"[green]{timeText} ms[/] [cyan]{pctText}%[/] [blue]{callsText}x[/] {nameText}";
+}
+
+string FormatExceptionCallTreeLine(
+    CallTreeNode node,
+    double totalCount,
+    bool isRoot,
+    string? rootLabelOverride,
+    bool isLeaf = false)
+{
+    var matchName = GetCallTreeMatchName(node);
+    var displayName = isRoot && !string.IsNullOrWhiteSpace(rootLabelOverride)
+        ? rootLabelOverride
+        : matchName;
+    if (displayName.Length > 80)
+    {
+        displayName = displayName[..77] + "...";
+    }
+
+    var count = isRoot ? totalCount : node.Total;
+    var pct = totalCount > 0 ? 100 * count / totalCount : 0;
+    var countText = count.ToString("N0", CultureInfo.InvariantCulture);
+    var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
+    var nameText = FormatCallTreeName(displayName, matchName, isLeaf);
+
+    return $"[green]{countText}x[/] [cyan]{pctText}%[/] {nameText}";
 }
 
 CallTreeNode GetOrCreateCallTreeChild(
@@ -1971,6 +2738,42 @@ bool MatchesFunctionFilter(string name, string? filter)
            NameFormatter.FormatMethodDisplayName(name).Contains(filter, StringComparison.OrdinalIgnoreCase);
 }
 
+IReadOnlyList<ExceptionTypeSample> FilterExceptionTypes(
+    IReadOnlyList<ExceptionTypeSample> types,
+    string? filter)
+{
+    if (string.IsNullOrWhiteSpace(filter))
+    {
+        return types;
+    }
+
+    return types
+        .Where(entry => entry.Type.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                        NameFormatter.FormatTypeDisplayName(entry.Type)
+                            .Contains(filter, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+}
+
+string? SelectExceptionType(IReadOnlyList<ExceptionTypeSample> types, string? filter)
+{
+    if (string.IsNullOrWhiteSpace(filter))
+    {
+        return null;
+    }
+
+    foreach (var entry in types)
+    {
+        if (entry.Type.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+            NameFormatter.FormatTypeDisplayName(entry.Type)
+                .Contains(filter, StringComparison.OrdinalIgnoreCase))
+        {
+            return entry.Type;
+        }
+    }
+
+    return null;
+}
+
 bool IsRuntimeNoise(string name)
 {
     var trimmed = name.TrimStart();
@@ -2217,7 +3020,13 @@ string BuildInputLabel(string inputPath)
     return name;
 }
 
-void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, ref bool runHeap, ref bool runContention)
+void ApplyInputDefaults(
+    string inputPath,
+    ref bool runCpu,
+    ref bool runMemory,
+    ref bool runHeap,
+    ref bool runException,
+    ref bool runContention)
 {
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
     switch (extension)
@@ -2227,10 +3036,12 @@ void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, r
             break;
         case ".nettrace":
             runCpu = true;
+            runException = true;
             runContention = true;
             break;
         case ".etlx":
             runMemory = true;
+            runException = true;
             runContention = true;
             break;
         case ".gcdump":
@@ -2247,6 +3058,8 @@ void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, r
 // Command-line setup
 var cpuOption = new Option<bool>("--cpu", "Run CPU profiling only");
 var memoryOption = new Option<bool>("--memory", "Run memory profiling only");
+var exceptionOption = new Option<bool>("--exception", "Run exception profiling only");
+exceptionOption.AddAlias("--exceptions");
 var contentionOption = new Option<bool>("--contention", "Run lock contention profiling only");
 var heapOption = new Option<bool>("--heap", "Capture heap snapshot");
 var callTreeRootOption = new Option<string?>("--root", "Filter call tree to a root method (substring match)");
@@ -2256,6 +3069,7 @@ var callTreeRootModeOption = new Option<string?>("--root-mode", () => "hottest",
 var callTreeSelfOption = new Option<bool>("--calltree-self", "Show self-time call tree in addition to total time");
 var callTreeSiblingCutoffOption = new Option<int>("--calltree-sibling-cutoff", () => 5, "Hide siblings below X% of the top sibling (default: 5)");
 var functionFilterOption = new Option<string?>("--filter", "Filter CPU function tables by substring (case-insensitive)");
+var exceptionTypeOption = new Option<string?>("--exception-type", "Filter exception tables and call trees by exception type (substring match)");
 var includeRuntimeOption = new Option<bool>("--include-runtime", "Include runtime/process frames in CPU tables and call tree");
 var inputOption = new Option<string?>("--input", "Render results from an existing trace file");
 var targetFrameworkOption = new Option<string?>("--tfm", "Target framework to use for .csproj/.sln inputs (e.g. net8.0)");
@@ -2263,10 +3077,11 @@ var commandArg = new Argument<string[]>("command", () => Array.Empty<string>(),
     "Command to profile (pass after --)");
 commandArg.Arity = ArgumentArity.ZeroOrMore;
 
-var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Contention/Heap profiling for .NET commands")
+var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Contention/Heap profiling for .NET commands")
 {
     cpuOption,
     memoryOption,
+    exceptionOption,
     contentionOption,
     heapOption,
     callTreeRootOption,
@@ -2276,6 +3091,7 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Contention/Hea
     callTreeSelfOption,
     callTreeSiblingCutoffOption,
     functionFilterOption,
+    exceptionTypeOption,
     includeRuntimeOption,
     inputOption,
     targetFrameworkOption,
@@ -2288,6 +3104,7 @@ rootCommand.SetHandler(context =>
 {
     var cpu = context.ParseResult.GetValueForOption(cpuOption);
     var memory = context.ParseResult.GetValueForOption(memoryOption);
+    var exception = context.ParseResult.GetValueForOption(exceptionOption);
     var contention = context.ParseResult.GetValueForOption(contentionOption);
     var heap = context.ParseResult.GetValueForOption(heapOption);
     var callTreeRoot = context.ParseResult.GetValueForOption(callTreeRootOption);
@@ -2297,16 +3114,18 @@ rootCommand.SetHandler(context =>
     var callTreeSelf = context.ParseResult.GetValueForOption(callTreeSelfOption);
     var callTreeSiblingCutoff = context.ParseResult.GetValueForOption(callTreeSiblingCutoffOption);
     var functionFilter = context.ParseResult.GetValueForOption(functionFilterOption);
+    var exceptionTypeFilter = context.ParseResult.GetValueForOption(exceptionTypeOption);
     var includeRuntime = context.ParseResult.GetValueForOption(includeRuntimeOption);
     var inputPath = context.ParseResult.GetValueForOption(inputOption);
     var targetFramework = context.ParseResult.GetValueForOption(targetFrameworkOption);
     var command = context.ParseResult.GetValueForArgument(commandArg) ?? Array.Empty<string>();
 
     var hasInput = !string.IsNullOrWhiteSpace(inputPath);
-    var hasExplicitModes = cpu || memory || heap || contention;
+    var hasExplicitModes = cpu || memory || heap || contention || exception;
     var runCpu = cpu || !hasExplicitModes;
     var runMemory = memory || !hasExplicitModes;
     var runHeap = heap;
+    var runException = exception;
     var runContention = contention;
 
     var resolver = new ProjectResolver(RunProcess);
@@ -2318,7 +3137,7 @@ rootCommand.SetHandler(context =>
         description = inputPath!;
         if (!hasExplicitModes)
         {
-            ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap, ref runContention);
+            ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap, ref runException, ref runContention);
         }
     }
     else
@@ -2375,6 +3194,26 @@ rootCommand.SetHandler(context =>
             includeRuntime,
             callTreeDepth,
             callTreeWidth,
+            callTreeSiblingCutoff);
+    }
+
+    if (runException)
+    {
+        Console.WriteLine($"{label} - exception");
+        var results = hasInput
+            ? ExceptionProfileFromInput(inputPath!, label)
+            : ExceptionProfileCommand(command, label);
+        PrintExceptionResults(
+            results,
+            label,
+            description,
+            callTreeRoot,
+            exceptionTypeFilter,
+            functionFilter,
+            includeRuntime,
+            callTreeDepth,
+            callTreeWidth,
+            callTreeRootMode,
             callTreeSiblingCutoff);
     }
 
