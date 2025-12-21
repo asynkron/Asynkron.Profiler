@@ -4,7 +4,23 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <RootNamespace>Asynkron.Profiler</RootNamespace>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>asynkron-profiler</ToolCommandName>
+    <PackageId>Asynkron.Profiler</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Asynkron</Authors>
+    <Description>Lightweight CLI for CPU, memory allocation, and heap profiling of .NET commands.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Asynkron/Asynkron.Profiler</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Asynkron/Asynkron.Profiler</PackageProjectUrl>
+    <PackageTags>profiling;dotnet;trace;performance</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />

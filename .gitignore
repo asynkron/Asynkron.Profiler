@@ -4,6 +4,8 @@
 
 # Profiling outputs
 profile-output/
+*.nupkg
+*.snupkg
 
 # OS
 .DS_Store
