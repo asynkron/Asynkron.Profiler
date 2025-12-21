@@ -59,6 +59,10 @@ void PrintSection(string text)
 var outputDir = Path.Combine(Environment.CurrentDirectory, "profile-output");
 Directory.CreateDirectory(outputDir);
 
+var toolAvailability = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+const string DotnetTraceInstall = "dotnet tool install -g dotnet-trace";
+const string DotnetGcdumpInstall = "dotnet tool install -g dotnet-gcdump";
+
 if (Console.IsOutputRedirected)
 {
     var capabilities = AnsiConsole.Profile.Capabilities;
@@ -70,8 +74,34 @@ if (Console.IsOutputRedirected)
     AnsiConsole.Profile.Width = 200;
 }
 
+bool EnsureToolAvailable(string toolName, string installHint)
+{
+    if (toolAvailability.TryGetValue(toolName, out var cached))
+    {
+        return cached;
+    }
+
+    var (success, _, stderr) = RunProcess(toolName, new[] { "--version" }, timeoutMs: 10000);
+    if (!success)
+    {
+        var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
+        AnsiConsole.MarkupLine($"[red]{toolName} unavailable:[/] {Markup.Escape(detail)}");
+        AnsiConsole.MarkupLine($"[yellow]Install:[/] {Markup.Escape(installHint)}");
+        toolAvailability[toolName] = false;
+        return false;
+    }
+
+    toolAvailability[toolName] = true;
+    return true;
+}
+
 CpuProfileResult? CpuProfileCommand(string[] command, string label)
 {
+    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    {
+        return null;
+    }
+
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
     var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.nettrace");
     var speedscopeFile = Path.Combine(outputDir, $"{label}_{timestamp}.speedscope.json");
@@ -340,8 +370,59 @@ void PrintCpuResults(
     }
 }
 
+CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
+{
+    if (!File.Exists(inputPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
+    if (extension == ".json")
+    {
+        return AnalyzeSpeedscope(inputPath);
+    }
+
+    if (extension != ".nettrace")
+    {
+        AnsiConsole.MarkupLine($"[red]Unsupported CPU input:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    {
+        return null;
+    }
+
+    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+    var speedscopeFile = Path.Combine(outputDir, $"{label}_{timestamp}.speedscope.json");
+    var convertArgs = new[]
+    {
+        "convert",
+        inputPath,
+        "--format",
+        "Speedscope",
+        "--output",
+        speedscopeFile
+    };
+    var convert = RunProcess("dotnet-trace", convertArgs, timeoutMs: 120000);
+    if (!convert.Success || !File.Exists(speedscopeFile))
+    {
+        AnsiConsole.MarkupLine($"[red]Speedscope conversion failed:[/] {Markup.Escape(convert.StdErr)}");
+        return null;
+    }
+
+    return AnalyzeSpeedscope(speedscopeFile);
+}
+
 MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
 {
+    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    {
+        return null;
+    }
+
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
     var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.alloc.nettrace");
 
@@ -372,6 +453,55 @@ MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
             return AnalyzeAllocationTrace(traceFile);
         });
 
+    if (callTree == null)
+    {
+        return null;
+    }
+
+    var allocationEntries = callTree.TypeRoots
+        .OrderByDescending(root => root.TotalBytes)
+        .Take(50)
+        .Select(root => new AllocationEntry(root.Name, root.Count, FormatBytes(root.TotalBytes)))
+        .ToList();
+
+    var totalAllocated = FormatBytes(callTree.TotalBytes);
+
+    return new MemoryProfileResult(
+        null,
+        null,
+        null,
+        totalAllocated,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        totalAllocated,
+        allocationEntries,
+        callTree,
+        null,
+        null);
+}
+
+MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
+{
+    if (!File.Exists(inputPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
+    if (extension != ".nettrace" && extension != ".etlx")
+    {
+        AnsiConsole.MarkupLine($"[red]Unsupported memory input:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    var callTree = AnalyzeAllocationTrace(inputPath);
     if (callTree == null)
     {
         return null;
@@ -1264,6 +1394,11 @@ bool StartsWithDigits(string name)
 
 HeapProfileResult? HeapProfileCommand(string[] command, string label)
 {
+    if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
+    {
+        return null;
+    }
+
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
     var gcdumpFile = Path.Combine(outputDir, $"{label}_{timestamp}.gcdump");
 
@@ -1331,6 +1466,46 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
 
     AnsiConsole.MarkupLine($"[yellow]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
     return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
+}
+
+HeapProfileResult? HeapProfileFromInput(string inputPath)
+{
+    if (!File.Exists(inputPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        return null;
+    }
+
+    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
+    if (extension == ".gcdump")
+    {
+        if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
+        {
+            return null;
+        }
+
+        var (reportSuccess, reportOut, reportErr) = RunProcess(
+            "dotnet-gcdump",
+            new[] { "report", inputPath },
+            timeoutMs: 60000);
+
+        if (reportSuccess)
+        {
+            return ParseGcdumpReport(reportOut);
+        }
+
+        AnsiConsole.MarkupLine($"[yellow]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
+        return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
+    }
+
+    if (extension == ".txt" || extension == ".log")
+    {
+        var report = File.ReadAllText(inputPath);
+        return ParseGcdumpReport(report);
+    }
+
+    AnsiConsole.MarkupLine($"[red]Unsupported heap input:[/] {Markup.Escape(inputPath)}");
+    return null;
 }
 
 HeapProfileResult ParseGcdumpReport(string output)
@@ -1444,6 +1619,45 @@ string BuildCommandLabel(string[] command)
     return name;
 }
 
+string BuildInputLabel(string inputPath)
+{
+    var name = Path.GetFileNameWithoutExtension(inputPath);
+    if (string.IsNullOrWhiteSpace(name))
+    {
+        name = "input";
+    }
+
+    foreach (var invalid in Path.GetInvalidFileNameChars())
+    {
+        name = name.Replace(invalid, '_');
+    }
+
+    return name;
+}
+
+void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, ref bool runHeap)
+{
+    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
+    switch (extension)
+    {
+        case ".json":
+        case ".nettrace":
+            runCpu = true;
+            break;
+        case ".etlx":
+            runMemory = true;
+            break;
+        case ".gcdump":
+        case ".txt":
+        case ".log":
+            runHeap = true;
+            break;
+        default:
+            runCpu = true;
+            break;
+    }
+}
+
 string BuildCommandDescription(string[] command)
 {
     return command.Length == 0 ? string.Empty : string.Join(' ', command);
@@ -1461,6 +1675,7 @@ var callTreeSelfOption = new Option<bool>("--calltree-self", "Show self-time cal
 var callTreeSiblingCutoffOption = new Option<int>("--calltree-sibling-cutoff", () => 5, "Hide siblings below X% of the top sibling (default: 5)");
 var functionFilterOption = new Option<string?>("--filter", "Filter CPU function tables by substring (case-insensitive)");
 var includeRuntimeOption = new Option<bool>("--include-runtime", "Include runtime/process frames in CPU tables and call tree");
+var inputOption = new Option<string?>("--input", "Render results from an existing trace file");
 var commandArg = new Argument<string[]>("command", () => Array.Empty<string>(),
     "Command to profile (pass after --)");
 commandArg.Arity = ArgumentArity.ZeroOrMore;
@@ -1478,6 +1693,7 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory profiling for 
     callTreeSiblingCutoffOption,
     functionFilterOption,
     includeRuntimeOption,
+    inputOption,
     commandArg
 };
 
@@ -1496,26 +1712,44 @@ rootCommand.SetHandler(context =>
     var callTreeSiblingCutoff = context.ParseResult.GetValueForOption(callTreeSiblingCutoffOption);
     var functionFilter = context.ParseResult.GetValueForOption(functionFilterOption);
     var includeRuntime = context.ParseResult.GetValueForOption(includeRuntimeOption);
+    var inputPath = context.ParseResult.GetValueForOption(inputOption);
     var command = context.ParseResult.GetValueForArgument(commandArg) ?? Array.Empty<string>();
 
-    if (command.Length == 0)
-    {
-        AnsiConsole.MarkupLine("[red]No command provided.[/]");
-        AnsiConsole.MarkupLine("[dim]Example: asynkron-profiler --cpu -- dotnet run MyProject.sln[/]");
-        return;
-    }
-
-    var label = BuildCommandLabel(command);
-    var description = BuildCommandDescription(command);
-
+    var hasInput = !string.IsNullOrWhiteSpace(inputPath);
     var runCpu = cpu || (!cpu && !memory && !heap);
     var runMemory = memory || (!cpu && !memory && !heap);
     var runHeap = heap;
 
+    string label;
+    string description;
+    if (hasInput)
+    {
+        label = BuildInputLabel(inputPath!);
+        description = inputPath!;
+        if (!cpu && !memory && !heap)
+        {
+            ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap);
+        }
+    }
+    else
+    {
+        if (command.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[red]No command provided.[/]");
+            AnsiConsole.MarkupLine("[dim]Example: asynkron-profiler --cpu -- dotnet run MyProject.sln[/]");
+            return;
+        }
+
+        label = BuildCommandLabel(command);
+        description = BuildCommandDescription(command);
+    }
+
     if (runCpu)
     {
         Console.WriteLine($"{label} - cpu");
-        var results = CpuProfileCommand(command, label);
+        var results = hasInput
+            ? CpuProfileFromInput(inputPath!, label)
+            : CpuProfileCommand(command, label);
         PrintCpuResults(
             results,
             label,
@@ -1533,7 +1767,9 @@ rootCommand.SetHandler(context =>
     if (runMemory)
     {
         Console.WriteLine($"{label} - memory");
-        var results = MemoryProfileCommand(command, label);
+        var results = hasInput
+            ? MemoryProfileFromInput(inputPath!, label)
+            : MemoryProfileCommand(command, label);
         PrintMemoryResults(
             results,
             label,
@@ -1548,7 +1784,9 @@ rootCommand.SetHandler(context =>
     if (runHeap)
     {
         Console.WriteLine($"{label} - heap");
-        var results = HeapProfileCommand(command, label);
+        var results = hasInput
+            ? HeapProfileFromInput(inputPath!)
+            : HeapProfileCommand(command, label);
         PrintHeapResults(results, label, description);
     }
 });
