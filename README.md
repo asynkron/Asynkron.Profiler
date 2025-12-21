@@ -8,7 +8,7 @@ dotnet tool install -g asynkron-profiler --prerelease
 
 A lightweight CLI for CPU, memory allocation, and heap profiling of any .NET command using `dotnet-trace` and `dotnet-gcdump`.
 
-This tool is a profiler frontend/CLI UI intended for both humans and AI agents. The goal is to make profiler data accessible in plain text, so automation and AI workflows can consume the same insights that are typically locked behind GUI tools like dotMemory or dotTrace.
+This is a profiler frontend/CLI UI built for humans and automation (including AI agents). It outputs plain‑text, structured summaries so the same insights you’d inspect in GUI tools like dotMemory or dotTrace are available to scripts and agent workflows.
 
 ## Prerequisites
 
