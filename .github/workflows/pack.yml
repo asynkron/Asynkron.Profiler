@@ -16,7 +16,9 @@ jobs:
           dotnet-version: '10.0.x'
           dotnet-quality: 'preview'
       - name: Pack
-        run: dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj -p:Version="$VERSION"
       - name: Publish to NuGet
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
