@@ -662,8 +662,9 @@ ContentionProfileResult? ContentionProfileCommand(string[] command, string label
 
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
     var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.cont.nettrace");
-    var keywords = ((ulong)ClrTraceEventParser.Keywords.Contention).ToString("x", CultureInfo.InvariantCulture);
-    var provider = $"Microsoft-DotNETRuntime:0x{keywords}:4";
+    var keywordsValue = ClrTraceEventParser.Keywords.Contention | ClrTraceEventParser.Keywords.Threading;
+    var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
+    var provider = $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
@@ -736,35 +737,31 @@ ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
         using var traceLog = TraceLog.OpenOrConvert(etlxPath, new TraceLogOptions { ConversionLog = TextWriter.Null });
         using var source = traceLog.Events.GetSource();
 
-        source.Clr.ContentionStart += data =>
+        var sawTypedEvent = false;
+        void HandleStart(int threadId, double timeMs, TraceCallStack? stack)
         {
-            var stack = data.CallStack();
-            if (!pending.TryGetValue(data.ThreadID, out var stackList))
+            if (!pending.TryGetValue(threadId, out var stackList))
             {
                 stackList = new Stack<(double StartTime, TraceCallStack? Stack)>();
-                pending[data.ThreadID] = stackList;
+                pending[threadId] = stackList;
             }
 
-            stackList.Push((data.TimeStampRelativeMSec, stack));
-        };
+            stackList.Push((timeMs, stack));
+        }
 
-        source.Clr.ContentionStop += data =>
+        void HandleStop(int threadId, double timeMs, double durationMs, TraceCallStack? stack)
         {
-            var durationMs = data.DurationNs > 0
-                ? data.DurationNs / 1_000_000d
-                : 0d;
-            var stack = data.CallStack();
-            if (pending.TryGetValue(data.ThreadID, out var stackList) && stackList.Count > 0)
+            if (pending.TryGetValue(threadId, out var stackList) && stackList.Count > 0)
             {
                 var entry = stackList.Pop();
                 if (stackList.Count == 0)
                 {
-                    pending.Remove(data.ThreadID);
+                    pending.Remove(threadId);
                 }
 
                 if (durationMs <= 0)
                 {
-                    durationMs = data.TimeStampRelativeMSec - entry.StartTime;
+                    durationMs = timeMs - entry.StartTime;
                 }
 
                 stack ??= entry.Stack;
@@ -817,7 +814,66 @@ ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
 
             totalWaitMs += durationMs;
             totalCount += 1;
+        }
+
+        source.Clr.ContentionStart += data =>
+        {
+            sawTypedEvent = true;
+            HandleStart(data.ThreadID, data.TimeStampRelativeMSec, data.CallStack());
         };
+
+        source.Clr.ContentionStop += data =>
+        {
+            sawTypedEvent = true;
+            var durationMs = data.DurationNs > 0
+                ? data.DurationNs / 1_000_000d
+                : 0d;
+            HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
+        };
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ContentionStart_V2",
+            data =>
+            {
+                HandleStart(data.ThreadID, data.TimeStampRelativeMSec, data.CallStack());
+            });
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ContentionStop_V2",
+            data =>
+            {
+                var durationMs = TryGetPayloadDurationMs(data);
+                HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
+            });
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ContentionStart",
+            data =>
+            {
+                if (sawTypedEvent)
+                {
+                    return;
+                }
+
+                HandleStart(data.ThreadID, data.TimeStampRelativeMSec, data.CallStack());
+            });
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ContentionStop",
+            data =>
+            {
+                if (sawTypedEvent)
+                {
+                    return;
+                }
+
+                var durationMs = TryGetPayloadDurationMs(data);
+                HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
+            });
 
         source.Process();
 
@@ -862,6 +918,48 @@ IEnumerable<string> EnumerateContentionFrames(TraceCallStack? stack)
         {
             yield return methodName;
         }
+    }
+}
+
+double TryGetPayloadDurationMs(TraceEvent data)
+{
+    var durationNs = TryGetPayloadLong(data, "DurationNs")
+                     ?? TryGetPayloadLong(data, "DurationNS")
+                     ?? TryGetPayloadLong(data, "Duration");
+    if (durationNs is > 0)
+    {
+        return durationNs.Value / 1_000_000d;
+    }
+
+    return 0d;
+}
+
+long? TryGetPayloadLong(TraceEvent data, string name)
+{
+    try
+    {
+        var value = data.PayloadByName(name);
+        if (value == null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            byte v => v,
+            sbyte v => v,
+            short v => v,
+            ushort v => v,
+            int v => v,
+            uint v => v,
+            long v => v,
+            ulong v => v <= long.MaxValue ? (long)v : null,
+            _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
+        };
+    }
+    catch
+    {
+        return null;
     }
 }
 
