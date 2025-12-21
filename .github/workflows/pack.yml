@@ -17,6 +17,10 @@ jobs:
           dotnet-quality: 'preview'
       - name: Pack
         run: dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj
+      - name: Publish to NuGet
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push ./nupkg/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
