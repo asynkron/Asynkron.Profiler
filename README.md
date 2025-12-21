@@ -27,7 +27,7 @@ dotnet build -c Release
 asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
 ```
 
-You can also profile `dotnet run`, but it will include build/restore and host overhead:
+You can also profile `dotnet run`, but it will mostly capture the dotnet host (and build/restore). Use this only if you can't run the built output directly:
 
 ```bash
 asynkron-profiler --cpu -- dotnet run -c Release ./MyApp.csproj
