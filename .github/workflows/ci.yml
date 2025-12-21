@@ -20,3 +20,5 @@ jobs:
         run: dotnet restore
       - name: Build
         run: dotnet build -c Release --nologo
+      - name: Test
+        run: dotnet test -c Release --nologo

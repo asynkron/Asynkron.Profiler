@@ -2,7 +2,6 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using Asynkron.Profiler;
 using Microsoft.Diagnostics.Tracing;
@@ -271,7 +270,7 @@ void PrintCpuResults(
 
     foreach (var entry in filteredList.Take(15))
     {
-        var funcName = FormatMethodDisplayName(entry.Name);
+        var funcName = NameFormatter.FormatMethodDisplayName(entry.Name);
         if (funcName.Length > 70) funcName = funcName[..67] + "...";
 
         var timeMs = entry.TimeMs;
@@ -611,7 +610,7 @@ void PrintAllocationCallTree(
         var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
         var bytesText = FormatBytes(root.TotalBytes);
         var countText = root.Count.ToString("N0", CultureInfo.InvariantCulture);
-        var header = $"{FormatTypeDisplayName(root.Name)} ({bytesText}, {pctText}%, {countText}x)";
+        var header = $"{NameFormatter.FormatTypeDisplayName(root.Name)} ({bytesText}, {pctText}%, {countText}x)";
 
         var tree = BuildAllocationCallTree(root, includeRuntime, maxDepth, maxWidth, siblingCutoffPercent);
         AnsiConsole.Write(new Rows(new Markup($"[bold yellow]{Markup.Escape(header)}[/]"), tree));
@@ -630,7 +629,7 @@ IEnumerable<AllocationCallTreeNode> FilterAllocationRoots(
     var filter = rootFilter.Trim();
     return roots.Where(root =>
         root.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-        FormatTypeDisplayName(root.Name).Contains(filter, StringComparison.OrdinalIgnoreCase));
+        NameFormatter.FormatTypeDisplayName(root.Name).Contains(filter, StringComparison.OrdinalIgnoreCase));
 }
 
 IReadOnlyList<AllocationCallTreeNode> GetVisibleAllocationRoots(
@@ -681,7 +680,7 @@ IRenderable BuildAllocationCallTree(
     var children = GetVisibleAllocationChildren(root, includeRuntime, maxWidth, siblingCutoffPercent);
     foreach (var child in children)
     {
-        var isSpecialLeaf = ShouldStopAtLeaf(FormatMethodDisplayName(child.Name));
+        var isSpecialLeaf = ShouldStopAtLeaf(NameFormatter.FormatMethodDisplayName(child.Name));
         var childChildren = !isSpecialLeaf
             ? GetVisibleAllocationChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
             : Array.Empty<AllocationCallTreeNode>();
@@ -724,7 +723,7 @@ void AddAllocationCallTreeChildren(
     foreach (var child in children)
     {
         var nextDepth = depth + 1;
-        var isSpecialLeaf = ShouldStopAtLeaf(FormatMethodDisplayName(child.Name));
+        var isSpecialLeaf = ShouldStopAtLeaf(NameFormatter.FormatMethodDisplayName(child.Name));
         var childChildren = !isSpecialLeaf && nextDepth <= maxDepth
             ? GetVisibleAllocationChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
             : Array.Empty<AllocationCallTreeNode>();
@@ -811,7 +810,7 @@ string FormatAllocationCallTreeLine(
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
     var countText = count.ToString("N0", CultureInfo.InvariantCulture);
 
-    var displayName = isRoot ? FormatTypeDisplayName(node.Name) : FormatMethodDisplayName(node.Name);
+    var displayName = isRoot ? NameFormatter.FormatTypeDisplayName(node.Name) : NameFormatter.FormatMethodDisplayName(node.Name);
     if (displayName.Length > 80)
     {
         displayName = displayName[..77] + "...";
@@ -1017,7 +1016,7 @@ List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
     {
         if (current.FrameIdx >= 0)
         {
-            var displayName = FormatMethodDisplayName(current.Name);
+            var displayName = NameFormatter.FormatMethodDisplayName(current.Name);
             if (displayName.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase) ||
                 current.Name.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase))
             {
@@ -1114,7 +1113,7 @@ void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? alloca
 
     foreach (var entry in entries)
     {
-        var typeName = FormatTypeDisplayName(entry.Type);
+        var typeName = NameFormatter.FormatTypeDisplayName(entry.Type);
         if (typeName.Length > 80)
         {
             typeName = typeName[..77] + "...";
@@ -1143,52 +1142,6 @@ void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? alloca
     AnsiConsole.Write(table);
 }
 
-string FormatMethodDisplayName(string rawName)
-{
-    if (string.IsNullOrWhiteSpace(rawName))
-    {
-        return rawName;
-    }
-
-    var name = rawName;
-    if (name.Contains('!'))
-    {
-        name = name.Split('!')[^1];
-    }
-
-    var parenIdx = name.IndexOf('(');
-    if (parenIdx > 0)
-    {
-        name = name[..parenIdx];
-    }
-
-    var lastDot = name.LastIndexOf('.');
-    if (lastDot > 0 && lastDot < name.Length - 1)
-    {
-        var typePart = name[..lastDot].TrimEnd('.');
-        var methodPart = name[(lastDot + 1)..];
-        var compilerGenerated = FormatCompilerGeneratedMethod(typePart, methodPart);
-        if (!string.IsNullOrWhiteSpace(compilerGenerated))
-        {
-            return compilerGenerated;
-        }
-
-        return $"{CleanTypeName(typePart)}.{methodPart}";
-    }
-
-    return CleanTypeName(name);
-}
-
-string FormatTypeDisplayName(string rawName)
-{
-    if (string.IsNullOrWhiteSpace(rawName))
-    {
-        return rawName;
-    }
-
-    return CleanTypeName(rawName);
-}
-
 string FormatBytes(long bytes)
 {
     if (bytes < 1024)
@@ -1207,183 +1160,6 @@ string FormatBytes(long bytes)
     }
 
     return (bytes / (1024d * 1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " GB";
-}
-
-string CleanTypeName(string name)
-{
-    if (string.IsNullOrWhiteSpace(name))
-    {
-        return name;
-    }
-
-    var timeout = TimeSpan.FromMilliseconds(100);
-    var normalized = Regex.Replace(
-        name,
-        @"\b(?:[A-Za-z_][A-Za-z0-9_]*\.)+(?<type>[A-Za-z_][A-Za-z0-9_]*)",
-        "${type}",
-        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
-        timeout);
-
-    normalized = Regex.Replace(
-        normalized,
-        @"`\d+",
-        "",
-        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
-        timeout);
-
-    const string arrayToken = "__ARRAY__";
-    normalized = normalized.Replace("[]", arrayToken, StringComparison.Ordinal);
-    normalized = normalized.Replace('[', '<').Replace(']', '>');
-    normalized = normalized.Replace(arrayToken, "[]", StringComparison.Ordinal);
-    normalized = normalized.Replace('+', '.');
-
-    return normalized;
-}
-
-string? FormatCompilerGeneratedMethod(string typePart, string methodPart)
-{
-    if (string.IsNullOrWhiteSpace(typePart) || string.IsNullOrWhiteSpace(methodPart))
-    {
-        return null;
-    }
-
-    if (string.Equals(methodPart, "MoveNext", StringComparison.Ordinal))
-    {
-        var stateMethod = ExtractStateMachineMethodName(typePart);
-        if (!string.IsNullOrWhiteSpace(stateMethod))
-        {
-            return $"StateMachine.{stateMethod}.MoveNext";
-        }
-    }
-
-    var lambdaOwner = ExtractLambdaOwner(methodPart);
-    if (!string.IsNullOrWhiteSpace(lambdaOwner) && IsDisplayClassType(typePart))
-    {
-        var outerType = ExtractOuterType(typePart);
-        var prefix = string.IsNullOrWhiteSpace(outerType)
-            ? string.Empty
-            : CleanTypeName(outerType) + ".";
-        return $"{prefix}{lambdaOwner} lambda";
-    }
-
-    if (!string.IsNullOrWhiteSpace(lambdaOwner))
-    {
-        var prefix = string.IsNullOrWhiteSpace(typePart)
-            ? string.Empty
-            : CleanTypeName(typePart) + ".";
-        return $"{prefix}{lambdaOwner} lambda";
-    }
-
-    return null;
-}
-
-bool IsDisplayClassType(string typePart)
-{
-    return typePart.Contains("<>c__DisplayClass", StringComparison.Ordinal) ||
-           typePart.Contains("+<>c", StringComparison.Ordinal);
-}
-
-string? ExtractStateMachineMethodName(string typePart)
-{
-    var localFunctionIndex = typePart.LastIndexOf("g__", StringComparison.Ordinal);
-    if (localFunctionIndex >= 0)
-    {
-        var localStart = localFunctionIndex + 3;
-        var localEnd = typePart.IndexOfAny(new[] { '|', '>' }, localStart);
-        if (localEnd < 0)
-        {
-            localEnd = typePart.Length;
-        }
-
-        var name = typePart[localStart..localEnd];
-        return TrimCompilerGeneratedName(name);
-    }
-
-    var methodEnd = typePart.LastIndexOf(">d__", StringComparison.Ordinal);
-    if (methodEnd < 0)
-    {
-        methodEnd = typePart.LastIndexOf(">d", StringComparison.Ordinal);
-    }
-
-    if (methodEnd < 0)
-    {
-        methodEnd = typePart.LastIndexOf('>');
-    }
-
-    if (methodEnd < 0)
-    {
-        return null;
-    }
-
-    var methodStart = typePart.LastIndexOf('<', methodEnd);
-    if (methodStart < 0 || methodStart + 1 >= methodEnd)
-    {
-        return null;
-    }
-
-    var methodName = typePart[(methodStart + 1)..methodEnd];
-    return TrimCompilerGeneratedName(methodName);
-}
-
-string? ExtractLambdaOwner(string methodPart)
-{
-    if (string.IsNullOrWhiteSpace(methodPart))
-    {
-        return null;
-    }
-
-    var ownerStart = methodPart.IndexOf('<');
-    var ownerEnd = methodPart.IndexOf('>');
-    if (ownerStart < 0 || ownerEnd <= ownerStart)
-    {
-        return null;
-    }
-
-    var owner = methodPart[(ownerStart + 1)..ownerEnd];
-    return string.IsNullOrWhiteSpace(owner) ? null : owner;
-}
-
-string ExtractOuterType(string typePart)
-{
-    var markerIndex = typePart.IndexOf("+<", StringComparison.Ordinal);
-    if (markerIndex > 0)
-    {
-        return typePart[..markerIndex];
-    }
-
-    markerIndex = typePart.IndexOf("+<>c", StringComparison.Ordinal);
-    if (markerIndex > 0)
-    {
-        return typePart[..markerIndex];
-    }
-
-    return typePart;
-}
-
-string? TrimCompilerGeneratedName(string name)
-{
-    if (string.IsNullOrWhiteSpace(name))
-    {
-        return null;
-    }
-
-    var trimmed = name.Trim();
-    while (trimmed.StartsWith("<", StringComparison.Ordinal) ||
-           trimmed.EndsWith(">", StringComparison.Ordinal))
-    {
-        trimmed = trimmed.Trim('<', '>');
-    }
-
-    while (trimmed.EndsWith("$", StringComparison.Ordinal))
-    {
-        trimmed = trimmed[..^1];
-        while (trimmed.EndsWith(">", StringComparison.Ordinal))
-        {
-            trimmed = trimmed.TrimEnd('>');
-        }
-    }
-
-    return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
 }
 
 IReadOnlyList<CallTreeNode> GetVisibleChildren(
@@ -1458,7 +1234,7 @@ string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
 
 string GetCallTreeMatchName(CallTreeNode node)
 {
-    return FormatMethodDisplayName(node.Name);
+    return NameFormatter.FormatMethodDisplayName(node.Name);
 }
 
 bool ShouldStopAtLeaf(string matchName)
@@ -1485,13 +1261,13 @@ bool MatchesFunctionFilter(string name, string? filter)
     }
 
     return name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-           FormatMethodDisplayName(name).Contains(filter, StringComparison.OrdinalIgnoreCase);
+           NameFormatter.FormatMethodDisplayName(name).Contains(filter, StringComparison.OrdinalIgnoreCase);
 }
 
 bool IsRuntimeNoise(string name)
 {
     var trimmed = name.TrimStart();
-    var formatted = FormatMethodDisplayName(trimmed);
+    var formatted = NameFormatter.FormatMethodDisplayName(trimmed);
     return trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal) ||
            trimmed.Contains("(Non-Activities)", StringComparison.Ordinal) ||
            trimmed.Contains("Thread", StringComparison.Ordinal) ||
