@@ -10,7 +10,7 @@ A lightweight CLI for CPU, memory allocation, and heap profiling of any .NET com
 
 ## Prerequisites
 
-- .NET SDK 10.x (preview)
+- .NET SDK 10.x
 - `dotnet-trace` and `dotnet-gcdump` installed:
 
 ```bash
