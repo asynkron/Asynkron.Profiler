@@ -1,0 +1,9 @@
+# Build outputs
+**/bin/
+**/obj/
+
+# Profiling outputs
+profile-output/
+
+# OS
+.DS_Store
