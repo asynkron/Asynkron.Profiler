@@ -7,7 +7,7 @@
     <RootNamespace>Asynkron.Profiler</RootNamespace>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>asynkron-profiler</ToolCommandName>
-    <PackageId>Asynkron.Profiler</PackageId>
+    <PackageId>asynkron-profiler</PackageId>
     <Version>0.1.0</Version>
     <Authors>Asynkron</Authors>
     <Description>Lightweight CLI for CPU, memory allocation, and heap profiling of .NET commands.</Description>

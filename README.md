@@ -27,7 +27,7 @@ dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj
 Install from the local package:
 
 ```bash
-dotnet tool install -g --add-source ./nupkg Asynkron.Profiler
+dotnet tool install -g --add-source ./nupkg asynkron-profiler
 ```
 
 ## Usage
