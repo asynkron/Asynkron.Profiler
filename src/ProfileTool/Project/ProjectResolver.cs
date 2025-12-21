@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Spectre.Console;
 
@@ -203,6 +204,32 @@ internal sealed class ProjectResolver
         }
 
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var trimmed = stdout.TrimStart();
+        if (trimmed.StartsWith("{", StringComparison.Ordinal))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(stdout);
+                if (doc.RootElement.TryGetProperty("Properties", out var props))
+                {
+                    foreach (var property in props.EnumerateObject())
+                    {
+                        var value = property.Value.GetString();
+                        if (!string.IsNullOrWhiteSpace(property.Name))
+                        {
+                            result[property.Name] = value ?? string.Empty;
+                        }
+                    }
+
+                    return result;
+                }
+            }
+            catch
+            {
+                // Fall back to line parsing if JSON parsing fails.
+            }
+        }
+
         using var reader = new StringReader(stdout);
         string? line;
         while ((line = reader.ReadLine()) != null)
