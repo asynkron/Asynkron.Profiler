@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace Asynkron.JsEngine.Tools.ProfileTool;
+namespace Asynkron.Profiler;
 
 internal sealed record AllocationCallTreeResult(
     long TotalBytes,

@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
-using Asynkron.JsEngine.Tools.ProfileTool;
+using Asynkron.Profiler;
 using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Etlx;
 using Microsoft.Diagnostics.Tracing.Parsers;

@@ -1,7 +1,7 @@
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
-namespace Asynkron.JsEngine.Tools.ProfileTool;
+namespace Asynkron.Profiler;
 
 internal sealed class CompactTreeGuide : TreeGuide
 {
