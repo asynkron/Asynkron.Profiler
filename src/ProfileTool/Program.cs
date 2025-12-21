@@ -163,7 +163,8 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
 
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
     var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.nettrace");
-    var speedscopeFile = Path.Combine(outputDir, $"{label}_{timestamp}.speedscope.json");
+    var speedscopeBase = Path.Combine(outputDir, $"{label}_{timestamp}");
+    var speedscopeFile = speedscopeBase + ".speedscope.json";
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
@@ -196,7 +197,7 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
                 "--format",
                 "Speedscope",
                 "--output",
-                speedscopeFile
+                speedscopeBase
             };
             var convert = RunProcess("dotnet-trace", convertArgs, timeoutMs: 120000);
             if (!convert.Success || !File.Exists(speedscopeFile))
@@ -455,7 +456,8 @@ CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
     }
 
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var speedscopeFile = Path.Combine(outputDir, $"{label}_{timestamp}.speedscope.json");
+    var speedscopeBase = Path.Combine(outputDir, $"{label}_{timestamp}");
+    var speedscopeFile = speedscopeBase + ".speedscope.json";
     var convertArgs = new[]
     {
         "convert",
@@ -463,7 +465,7 @@ CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
         "--format",
         "Speedscope",
         "--output",
-        speedscopeFile
+        speedscopeBase
     };
     var convert = RunProcess("dotnet-trace", convertArgs, timeoutMs: 120000);
     if (!convert.Success || !File.Exists(speedscopeFile))
