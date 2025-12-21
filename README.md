@@ -33,6 +33,13 @@ Framework-dependent apps can be profiled via `dotnet`:
 asynkron-profiler --cpu -- dotnet ./bin/Release/<tfm>/MyApp.dll
 ```
 
+You can also pass a project or solution file directly. The profiler will build Release and run the resulting executable:
+
+```bash
+asynkron-profiler --cpu -- ./MyApp.csproj
+asynkron-profiler --cpu -- ./MySolution.sln
+```
+
 You can also profile `dotnet run`, but it will mostly capture the dotnet host (and build/restore). Use this only if you can't run the built output directly:
 
 ```bash
@@ -132,6 +139,7 @@ Outputs are written to `profile-output/` in the current working directory.
 - `--filter <text>` filter function tables by substring
 - `--include-runtime` include runtime/process frames
 - `--input <path>` render existing `nettrace`, `speedscope.json`, `etlx`, or `gcdump` files
+- `--tfm <tfm>` target framework when profiling a `.csproj` or `.sln`
 
 ## Troubleshooting
 

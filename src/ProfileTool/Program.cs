@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
+using System.Text.RegularExpressions;
 using Asynkron.Profiler;
 using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Etlx;
@@ -29,6 +30,8 @@ IReadOnlyList<string> GetUsageExampleLines()
         "CPU profiling:",
         "  asynkron-profiler --cpu -- ./bin/Release/<tfm>/MyApp",
         "  asynkron-profiler --cpu --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp",
+        "  asynkron-profiler --cpu --calltree-depth 5 -- ./MyApp.csproj",
+        "  asynkron-profiler --cpu --calltree-depth 5 -- ./MySolution.sln",
         "  asynkron-profiler --cpu --input ./profile-output/app.speedscope.json",
         "",
         "Memory profiling:",
@@ -1696,6 +1699,269 @@ string BuildInputLabel(string inputPath)
     return name;
 }
 
+ResolvedCommand? ResolveCommand(string[] command, string? targetFramework)
+{
+    if (command.Length == 1)
+    {
+        var path = command[0];
+        if (File.Exists(path))
+        {
+            var extension = Path.GetExtension(path);
+            if (extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase))
+            {
+                return ResolveProjectCommand(path, targetFramework, buildProject: true);
+            }
+
+            if (extension.Equals(".sln", StringComparison.OrdinalIgnoreCase))
+            {
+                return ResolveSolutionCommand(path, targetFramework);
+            }
+        }
+    }
+
+    var label = BuildCommandLabel(command);
+    var description = BuildCommandDescription(command);
+    return new ResolvedCommand(command, label, description);
+}
+
+ResolvedCommand? ResolveSolutionCommand(string solutionPath, string? targetFramework)
+{
+    var fullSolutionPath = Path.GetFullPath(solutionPath);
+    var solutionDir = Path.GetDirectoryName(fullSolutionPath);
+    if (solutionDir == null)
+    {
+        AnsiConsole.MarkupLine($"[red]Invalid solution path:[/] {Markup.Escape(solutionPath)}");
+        return null;
+    }
+
+    var buildArgs = new[] { "build", "-c", "Release", fullSolutionPath };
+    var (buildSuccess, _, buildErr) = RunProcess("dotnet", buildArgs, timeoutMs: 600000);
+    if (!buildSuccess)
+    {
+        AnsiConsole.MarkupLine($"[red]Build failed:[/] {Markup.Escape(buildErr)}");
+        return null;
+    }
+
+    var projectPaths = GetSolutionProjects(fullSolutionPath)
+        .Select(path => Path.GetFullPath(Path.Combine(solutionDir, path)))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    if (projectPaths.Count == 0)
+    {
+        AnsiConsole.MarkupLine($"[red]No projects found in solution:[/] {Markup.Escape(solutionPath)}");
+        return null;
+    }
+
+    var exeProjects = new List<string>();
+    foreach (var projectPath in projectPaths)
+    {
+        var outputType = GetProjectOutputType(projectPath, targetFramework);
+        if (outputType is "Exe" or "WinExe")
+        {
+            exeProjects.Add(projectPath);
+        }
+    }
+
+    if (exeProjects.Count == 1)
+    {
+        return ResolveProjectCommand(exeProjects[0], targetFramework, buildProject: false);
+    }
+
+    if (exeProjects.Count == 0)
+    {
+        AnsiConsole.MarkupLine("[red]No executable projects found in solution.[/]");
+    }
+    else
+    {
+        AnsiConsole.MarkupLine("[red]Multiple executable projects found in solution.[/]");
+    }
+
+    foreach (var project in exeProjects)
+    {
+        AnsiConsole.MarkupLine($"[dim]- {Markup.Escape(project)}[/]");
+    }
+
+    AnsiConsole.MarkupLine("[dim]Pass a .csproj path directly to profile a specific project.[/]");
+    return null;
+}
+
+string? GetProjectOutputType(string projectPath, string? targetFramework)
+{
+    var props = GetMsbuildProperties(projectPath, targetFramework);
+    if (props == null)
+    {
+        return null;
+    }
+
+    return props.TryGetValue("OutputType", out var outputType)
+        ? outputType
+        : null;
+}
+
+ResolvedCommand? ResolveProjectCommand(string projectPath, string? targetFramework, bool buildProject)
+{
+    var fullProjectPath = Path.GetFullPath(projectPath);
+    if (!File.Exists(fullProjectPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Project not found:[/] {Markup.Escape(projectPath)}");
+        return null;
+    }
+
+    if (buildProject)
+    {
+        var buildArgs = new[] { "build", "-c", "Release", fullProjectPath };
+        var (buildSuccess, _, buildErr) = RunProcess("dotnet", buildArgs, timeoutMs: 600000);
+        if (!buildSuccess)
+        {
+            AnsiConsole.MarkupLine($"[red]Build failed:[/] {Markup.Escape(buildErr)}");
+            return null;
+        }
+    }
+
+    var initialProps = GetMsbuildProperties(fullProjectPath, targetFramework);
+    if (initialProps == null)
+    {
+        return null;
+    }
+
+    var outputType = initialProps.TryGetValue("OutputType", out var outputTypeValue)
+        ? outputTypeValue
+        : string.Empty;
+
+    if (outputType is not ("Exe" or "WinExe"))
+    {
+        AnsiConsole.MarkupLine($"[red]Project is not executable:[/] {Markup.Escape(fullProjectPath)}");
+        return null;
+    }
+
+    var tfm = ResolveTargetFramework(initialProps, targetFramework, fullProjectPath);
+    if (string.IsNullOrWhiteSpace(tfm))
+    {
+        return null;
+    }
+
+    var finalProps = GetMsbuildProperties(fullProjectPath, tfm);
+    if (finalProps == null)
+    {
+        return null;
+    }
+
+    if (!finalProps.TryGetValue("TargetPath", out var targetPath) || string.IsNullOrWhiteSpace(targetPath))
+    {
+        AnsiConsole.MarkupLine($"[red]Could not determine output path for:[/] {Markup.Escape(fullProjectPath)}");
+        return null;
+    }
+
+    var command = ResolveTargetCommand(targetPath);
+    var label = Path.GetFileNameWithoutExtension(fullProjectPath);
+    var description = $"{fullProjectPath} (Release, {tfm})";
+    return new ResolvedCommand(command, label, description);
+}
+
+Dictionary<string, string>? GetMsbuildProperties(string projectPath, string? targetFramework)
+{
+    var args = new List<string>
+    {
+        "msbuild",
+        projectPath,
+        "-nologo",
+        "-getProperty:TargetFramework",
+        "-getProperty:TargetFrameworks",
+        "-getProperty:OutputType",
+        "-getProperty:TargetPath",
+        "-property:Configuration=Release"
+    };
+
+    if (!string.IsNullOrWhiteSpace(targetFramework))
+    {
+        args.Add($"-property:TargetFramework={targetFramework}");
+    }
+
+    var (success, stdout, stderr) = RunProcess("dotnet", args, timeoutMs: 600000);
+    if (!success)
+    {
+        AnsiConsole.MarkupLine($"[red]Failed to query project metadata:[/] {Markup.Escape(stderr)}");
+        return null;
+    }
+
+    var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    using var reader = new StringReader(stdout);
+    string? line;
+    while ((line = reader.ReadLine()) != null)
+    {
+        var index = line.IndexOf('=');
+        if (index <= 0)
+        {
+            continue;
+        }
+
+        var key = line[..index].Trim();
+        var value = line[(index + 1)..].Trim();
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            result[key] = value;
+        }
+    }
+
+    return result;
+}
+
+string? ResolveTargetFramework(
+    Dictionary<string, string> props,
+    string? targetFramework,
+    string projectPath)
+{
+    if (!string.IsNullOrWhiteSpace(targetFramework))
+    {
+        return targetFramework;
+    }
+
+    if (props.TryGetValue("TargetFrameworks", out var frameworksValue) &&
+        !string.IsNullOrWhiteSpace(frameworksValue))
+    {
+        var frameworks = frameworksValue
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        if (frameworks.Count == 1)
+        {
+            return frameworks[0];
+        }
+
+        AnsiConsole.MarkupLine($"[red]Multiple target frameworks found for:[/] {Markup.Escape(projectPath)}");
+        AnsiConsole.MarkupLine($"[dim]Use --tfm <tfm> to select one: {Markup.Escape(frameworksValue)}[/]");
+        return null;
+    }
+
+    return props.TryGetValue("TargetFramework", out var singleFramework)
+        ? singleFramework
+        : null;
+}
+
+string[] ResolveTargetCommand(string targetPath)
+{
+    if (targetPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+    {
+        return new[] { "dotnet", targetPath };
+    }
+
+    return new[] { targetPath };
+}
+
+IEnumerable<string> GetSolutionProjects(string solutionPath)
+{
+    var projectPattern = new Regex("Project\\([^)]*\\)\\s*=\\s*\"[^\"]+\",\\s*\"([^\"]+\\.csproj)\"", RegexOptions.IgnoreCase);
+    foreach (var line in File.ReadLines(solutionPath))
+    {
+        var match = projectPattern.Match(line);
+        if (match.Success)
+        {
+            yield return match.Groups[1].Value;
+        }
+    }
+}
+
 void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, ref bool runHeap)
 {
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
@@ -1737,6 +2003,7 @@ var callTreeSiblingCutoffOption = new Option<int>("--calltree-sibling-cutoff", (
 var functionFilterOption = new Option<string?>("--filter", "Filter CPU function tables by substring (case-insensitive)");
 var includeRuntimeOption = new Option<bool>("--include-runtime", "Include runtime/process frames in CPU tables and call tree");
 var inputOption = new Option<string?>("--input", "Render results from an existing trace file");
+var targetFrameworkOption = new Option<string?>("--tfm", "Target framework to use for .csproj/.sln inputs (e.g. net8.0)");
 var commandArg = new Argument<string[]>("command", () => Array.Empty<string>(),
     "Command to profile (pass after --)");
 commandArg.Arity = ArgumentArity.ZeroOrMore;
@@ -1755,6 +2022,7 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Heap profiling
     functionFilterOption,
     includeRuntimeOption,
     inputOption,
+    targetFrameworkOption,
     commandArg
 };
 
@@ -1774,6 +2042,7 @@ rootCommand.SetHandler(context =>
     var functionFilter = context.ParseResult.GetValueForOption(functionFilterOption);
     var includeRuntime = context.ParseResult.GetValueForOption(includeRuntimeOption);
     var inputPath = context.ParseResult.GetValueForOption(inputOption);
+    var targetFramework = context.ParseResult.GetValueForOption(targetFrameworkOption);
     var command = context.ParseResult.GetValueForArgument(commandArg) ?? Array.Empty<string>();
 
     var hasInput = !string.IsNullOrWhiteSpace(inputPath);
@@ -1801,8 +2070,15 @@ rootCommand.SetHandler(context =>
             return;
         }
 
-        label = BuildCommandLabel(command);
-        description = BuildCommandDescription(command);
+        var resolved = ResolveCommand(command, targetFramework);
+        if (resolved == null)
+        {
+            return;
+        }
+
+        command = resolved.Command;
+        label = resolved.Label;
+        description = resolved.Description;
     }
 
     if (runCpu)
@@ -1875,3 +2151,5 @@ var parser = new CommandLineBuilder(rootCommand)
     .Build();
 
 return await parser.InvokeAsync(args);
+
+sealed record ResolvedCommand(string[] Command, string Label, string Description);
