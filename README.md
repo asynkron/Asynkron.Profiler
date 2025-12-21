@@ -53,6 +53,16 @@ dotnet tool install -g --add-source ./nupkg asynkron-profiler
 
 ## Usage
 
+### Screenshots
+
+CPU call tree:
+
+![CPU call tree](assets/images/cpu-calltree.png)
+
+Memory allocation call tree:
+
+![Memory allocation call tree](assets/images/memory-calltree.png)
+
 ### Profile a command
 
 CPU profile a command:
