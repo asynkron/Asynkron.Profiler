@@ -27,7 +27,7 @@ dotnet build -c Release
 asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
 ```
 
-You can also profile `dotnet run`, but it will include build/restore overhead:
+You can also profile `dotnet run`, but it will include build/restore and host overhead:
 
 ```bash
 asynkron-profiler --cpu -- dotnet run -c Release ./MyApp.csproj
@@ -58,19 +58,19 @@ dotnet tool install -g --add-source ./nupkg asynkron-profiler
 CPU profile a command:
 
 ```bash
-asynkron-profiler --cpu -- dotnet run MyProject.sln
+asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
 ```
 
 Memory allocation profile (GC allocation ticks + call tree):
 
 ```bash
-asynkron-profiler --memory -- dotnet test
+asynkron-profiler --memory -- ./bin/Release/net8.0/MyApp
 ```
 
 Heap snapshot:
 
 ```bash
-asynkron-profiler --heap -- dotnet run path/to/app.csproj
+asynkron-profiler --heap -- ./bin/Release/net8.0/MyApp
 ```
 
 ### Render existing traces
@@ -128,7 +128,29 @@ Outputs are written to `profile-output/` in the current working directory.
 ## Examples
 
 ```bash
-asynkron-profiler --cpu --calltree-depth 20 -- dotnet run ./samples/MyApp/MyApp.csproj
-asynkron-profiler --memory --root "MyNamespace" -- dotnet test ./tests/MyApp.Tests/MyApp.Tests.csproj
+CPU profiling:
+asynkron-profiler --cpu -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --cpu --calltree-depth 5 -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --cpu --input ./profile-output/app.speedscope.json
+
+Memory profiling:
+asynkron-profiler --memory -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --memory --root "MyNamespace" -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --memory --input ./profile-output/app.nettrace
+
+Heap snapshot:
+asynkron-profiler --heap -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --heap --input ./profile-output/app.gcdump
+
+Render existing traces:
+asynkron-profiler --input ./profile-output/app.nettrace
+asynkron-profiler --input ./profile-output/app.speedscope.json --cpu
+asynkron-profiler --input ./profile-output/app.etlx --memory
+
+General:
+asynkron-profiler --help
+
+asynkron-profiler --cpu --calltree-depth 20 -- ./bin/Release/net8.0/MyApp
+asynkron-profiler --memory --root "MyNamespace" -- ./bin/Release/net8.0/MyApp
 asynkron-profiler --input ./profile-output/app.nettrace --cpu
 ```
