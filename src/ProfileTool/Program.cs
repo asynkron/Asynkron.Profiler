@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using System.Text;
 using System.Threading;
 using System.Text.RegularExpressions;
 using Asynkron.Profiler;
@@ -105,16 +106,65 @@ int GetHelpWidth()
             psi.WorkingDirectory = workingDir;
         }
 
-        using var process = Process.Start(psi)!;
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
+        using var process = new Process { StartInfo = psi };
+        if (!process.Start())
+        {
+            return (false, string.Empty, "Failed to start process.");
+        }
 
-        process.WaitForExit(timeoutMs);
-        return (process.ExitCode == 0, stdout, stderr);
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        var stdoutLock = new object();
+        var stderrLock = new object();
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data == null)
+            {
+                return;
+            }
+
+            lock (stdoutLock)
+            {
+                stdout.AppendLine(e.Data);
+            }
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data == null)
+            {
+                return;
+            }
+
+            lock (stderrLock)
+            {
+                stderr.AppendLine(e.Data);
+            }
+        };
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+
+        if (!process.WaitForExit(timeoutMs))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // Ignore kill failures.
+            }
+
+            return (false, stdout.ToString(), $"Process timed out after {timeoutMs} ms.");
+        }
+
+        process.WaitForExit();
+        return (process.ExitCode == 0, stdout.ToString(), stderr.ToString());
     }
     catch (Exception ex)
     {
-        return (false, "", ex.Message);
+        return (false, string.Empty, ex.Message);
     }
 }
 
@@ -1957,9 +2007,16 @@ IEnumerable<string> GetSolutionProjects(string solutionPath)
         var match = projectPattern.Match(line);
         if (match.Success)
         {
-            yield return match.Groups[1].Value;
+            yield return NormalizeSolutionPath(match.Groups[1].Value);
         }
     }
+}
+
+string NormalizeSolutionPath(string path)
+{
+    return path
+        .Replace('\\', Path.DirectorySeparatorChar)
+        .Replace('/', Path.DirectorySeparatorChar);
 }
 
 void ApplyInputDefaults(string inputPath, ref bool runCpu, ref bool runMemory, ref bool runHeap)
