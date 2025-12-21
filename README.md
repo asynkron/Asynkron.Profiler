@@ -74,6 +74,10 @@ asynkron-profiler --input /path/to/trace.etlx --memory
 
 # Render heap dump
 asynkron-profiler --input /path/to/heap.gcdump --heap
+
+# Manual flow: collect a CPU trace, then render it
+dotnet-trace collect --output ./profile-output/app.nettrace -- dotnet run MyProject.sln
+asynkron-profiler --input ./profile-output/app.nettrace --cpu
 ```
 
 Outputs are written to `profile-output/` in the current working directory.
