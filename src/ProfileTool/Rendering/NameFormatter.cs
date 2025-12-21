@@ -181,7 +181,7 @@ internal static class NameFormatter
             return null;
         }
 
-        var owner = methodPart[(ownerStart + 1)..ownerEnd];
+        var owner = TrimCompilerGeneratedName(methodPart[(ownerStart + 1)..ownerEnd]);
         return string.IsNullOrWhiteSpace(owner) ? null : owner;
     }
 
