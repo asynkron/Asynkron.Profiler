@@ -1,3 +1,5 @@
+<img src="assets/images/logo.png" alt="Asynkron Profiler" width="100%" />
+
 # Asynkron.Profiler
 
 Install globally:
