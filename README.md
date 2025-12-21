@@ -166,6 +166,104 @@ Outputs are written to `profile-output/` in the current working directory.
 - `--input <path>` render existing `nettrace`, `speedscope.json`, `etlx`, or `gcdump` files
 - `--tfm <tfm>` target framework when profiling a `.csproj` or `.sln`
 
+## Profiler flags
+
+### --cpu
+Sampled CPU profiling with a call tree and top‑function table.
+Use this to find the hottest methods by time.
+
+Example (examples/cpu):
+```bash
+dotnet build -c Release examples/cpu/CpuDemo.csproj
+asynkron-profiler --cpu -- ./examples/cpu/bin/Release/net10.0/CpuDemo
+```
+
+Sample output (top of call tree):
+```
+Call Tree (Total Time)
+327.41 ms 100.0% 1x Total
+└─ 299.66 ms 91.5% 1x Program.Main
+   └─ 298.22 ms 91.1% 1x Program.RunWork
+      └─ 281.02 ms 85.8% 1x Program.CpuWork
+         └─ 276.10 ms 84.3% 3x Program.Fib
+```
+
+### --memory
+Allocation profiling using GC allocation tick events, plus a per‑type call tree.
+Use this to find the biggest allocation sources.
+
+Example (examples/memory):
+```bash
+dotnet build -c Release examples/memory/MemoryDemo.csproj
+asynkron-profiler --memory -- ./examples/memory/bin/Release/net10.0/MemoryDemo
+```
+
+Sample output (top of call tree):
+```
+Allocation Call Tree (Sampled)
+Byte[] (20.06 MB, 69.4%, 198x)
+20.06 MB 100.0% 198x Byte[]
+└─ 19.95 MB 99.5% 197x Program.Main lambda
+```
+
+### --exception
+Exception profiling with thrown counts, throw‑site call tree, and optional catch‑site table/tree.
+Use `--exception-type` to focus on a specific exception.
+
+Example (examples/exception):
+```bash
+dotnet build -c Release examples/exception/ExceptionDemo.csproj
+asynkron-profiler --exception --exception-type "InvalidOperation" -- ./examples/exception/bin/Release/net10.0/ExceptionDemo
+```
+
+Sample output (top of call tree):
+```
+Call Tree (Thrown Exceptions)
+6,667x 100.0% InvalidOperationException
+└─ 6,667x 100.0% Program.Main lambda
+   └─ 6,667x 100.0% EH.DispatchEx
+```
+
+### --contention
+Lock contention profiling with wait‑time call tree and top contended methods.
+Use this to find where threads are blocking on locks.
+
+Example (examples/contention):
+```bash
+dotnet build -c Release examples/contention/ContentionDemo.csproj
+asynkron-profiler --contention -- ./examples/contention/bin/Release/net10.0/ContentionDemo
+```
+
+Sample output (top of call tree):
+```
+Call Tree (Wait Time)
+49563.89 ms 100.0% 96x Total
+└─ 49563.89 ms 100.0% 96x Program.RunWorkers lambda
+   └─ 49563.89 ms 100.0% 96x Program.WorkWithLock
+```
+
+### --heap
+Heap snapshot using `dotnet-gcdump`, with a summary of top types.
+Use this to inspect retained memory after the run.
+
+Example (examples/heap):
+```bash
+dotnet build -c Release examples/heap/HeapDemo.csproj
+asynkron-profiler --heap -- ./examples/heap/bin/Release/net8.0/HeapDemo
+```
+
+Sample output (top types):
+```
+HEAP SNAPSHOT: HeapDemo
+14,595,494  GC Heap bytes
+50,375  GC Heap objects
+
+Object Bytes  Count  Type
+  524,312     1    System.Byte[][] (Bytes > 100K)
+   30,168     1    System.String (Bytes > 10K)
+       24  50,003  System.Byte[]
+```
+
 ## Troubleshooting
 
 - `dotnet-trace` not found: install with `dotnet tool install -g dotnet-trace` and ensure your global tool path is on `PATH`.
