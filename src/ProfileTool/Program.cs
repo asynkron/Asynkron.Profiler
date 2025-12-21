@@ -1,6 +1,10 @@
 using System.CommandLine;
+using System.CommandLine.Builder;
+using System.CommandLine.Help;
+using System.CommandLine.Parsing;
 using System.Diagnostics;
 using System.Globalization;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using Asynkron.Profiler;
@@ -16,25 +20,59 @@ void PrintSection(string text)
     Console.WriteLine(text);
 }
 
-void PrintUsageExamples()
+IReadOnlyList<string> GetUsageExampleLines()
 {
-    Console.WriteLine("Examples:");
-    Console.WriteLine();
-    Console.WriteLine("CPU profiling:");
-    Console.WriteLine("  asynkron-profiler --cpu -- dotnet run MyProject.sln");
-    Console.WriteLine("  asynkron-profiler --cpu --calltree-depth 5 -- dotnet run MyProject.sln");
-    Console.WriteLine("  asynkron-profiler --cpu --input ./profile-output/app.speedscope.json");
-    Console.WriteLine();
-    Console.WriteLine("Memory profiling:");
-    Console.WriteLine("  asynkron-profiler --memory -- dotnet test");
-    Console.WriteLine("  asynkron-profiler --memory --input ./profile-output/app.nettrace");
-    Console.WriteLine();
-    Console.WriteLine("Heap snapshot:");
-    Console.WriteLine("  asynkron-profiler --heap -- dotnet run MyProject.sln");
-    Console.WriteLine("  asynkron-profiler --heap --input ./profile-output/app.gcdump");
-    Console.WriteLine();
-    Console.WriteLine("General:");
-    Console.WriteLine("  asynkron-profiler --help");
+    return new[]
+    {
+        "Examples:",
+        "",
+        "CPU profiling:",
+        "  asynkron-profiler --cpu -- dotnet run MyProject.sln",
+        "  asynkron-profiler --cpu --calltree-depth 5 -- dotnet run MyProject.sln",
+        "  asynkron-profiler --cpu --input ./profile-output/app.speedscope.json",
+        "",
+        "Memory profiling:",
+        "  asynkron-profiler --memory -- dotnet test",
+        "  asynkron-profiler --memory --root \"MyNamespace\" -- dotnet test",
+        "  asynkron-profiler --memory --input ./profile-output/app.nettrace",
+        "",
+        "Heap snapshot:",
+        "  asynkron-profiler --heap -- dotnet run MyProject.sln",
+        "  asynkron-profiler --heap --input ./profile-output/app.gcdump",
+        "",
+        "Render existing traces:",
+        "  asynkron-profiler --input ./profile-output/app.nettrace",
+        "  asynkron-profiler --input ./profile-output/app.speedscope.json --cpu",
+        "  asynkron-profiler --input ./profile-output/app.etlx --memory",
+        "",
+        "General:",
+        "  asynkron-profiler --help"
+    };
+}
+
+void WriteUsageExamples(TextWriter writer)
+{
+    foreach (var line in GetUsageExampleLines())
+    {
+        writer.WriteLine(line);
+    }
+}
+
+int GetHelpWidth()
+{
+    if (Console.IsOutputRedirected)
+    {
+        return 200;
+    }
+
+    try
+    {
+        return Math.Max(80, Console.WindowWidth);
+    }
+    catch
+    {
+        return 120;
+    }
 }
 
 (bool Success, string StdOut, string StdErr) RunProcess(
@@ -1757,7 +1795,7 @@ rootCommand.SetHandler(context =>
         if (command.Length == 0)
         {
             AnsiConsole.MarkupLine("[red]No command provided.[/]");
-            PrintUsageExamples();
+            WriteUsageExamples(Console.Out);
             return;
         }
 
@@ -1812,4 +1850,26 @@ rootCommand.SetHandler(context =>
     }
 });
 
-return await rootCommand.InvokeAsync(args);
+void ExamplesSection(HelpContext context)
+{
+    if (!ReferenceEquals(context.Command, rootCommand))
+    {
+        return;
+    }
+
+    context.Output.WriteLine();
+    WriteUsageExamples(context.Output);
+}
+
+var parser = new CommandLineBuilder(rootCommand)
+    .UseDefaults()
+    .UseHelpBuilder(_ =>
+    {
+        var helpBuilder = new HelpBuilder(LocalizationResources.Instance, GetHelpWidth());
+        helpBuilder.CustomizeLayout(context =>
+            HelpBuilder.Default.GetLayout().Concat(new HelpSectionDelegate[] { ExamplesSection }));
+        return helpBuilder;
+    })
+    .Build();
+
+return await parser.InvokeAsync(args);
