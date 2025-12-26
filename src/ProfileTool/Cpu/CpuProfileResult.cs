@@ -6,4 +6,5 @@ internal sealed record CpuProfileResult(
     IReadOnlyList<FunctionSample> AllFunctions,
     double TotalTime,
     CallTreeNode CallTreeRoot,
-    double CallTreeTotal);
+    double CallTreeTotal,
+    string? SpeedscopePath = null);

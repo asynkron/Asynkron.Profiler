@@ -33,6 +33,7 @@ IReadOnlyList<string> GetUsageExampleLines()
         "  asynkron-profiler --cpu --calltree-depth 5 -- ./MyApp.csproj",
         "  asynkron-profiler --cpu --calltree-depth 5 -- ./MySolution.sln",
         "  asynkron-profiler --cpu --input ./profile-output/app.speedscope.json",
+        "  asynkron-profiler --cpu --timeline -- ./bin/Release/<tfm>/MyApp",
         "",
         "Memory profiling:",
         "  asynkron-profiler --memory -- ./bin/Release/<tfm>/MyApp",
@@ -372,7 +373,8 @@ CpuProfileResult? AnalyzeSpeedscope(string speedscopePath)
         allFunctions,
         totalTime,
         callTreeRoot,
-        callTreeTotal);
+        callTreeTotal,
+        speedscopePath);
 }
 
 void PrintCpuResults(
@@ -386,7 +388,11 @@ void PrintCpuResults(
     int callTreeWidth,
     string? callTreeRootMode,
     bool showSelfTimeTree,
-    int callTreeSiblingCutoffPercent)
+    int callTreeSiblingCutoffPercent,
+    bool showTimeline = false,
+    int timelineWidth = 60,
+    int timelineMaxSpans = 100,
+    double timelineMinDuration = 0.1)
 {
     if (results == null)
     {
@@ -398,6 +404,36 @@ void PrintCpuResults(
     if (!string.IsNullOrWhiteSpace(description))
     {
         AnsiConsole.MarkupLine($"[dim]{description}[/]");
+    }
+
+    // Show timeline view if requested
+    if (showTimeline)
+    {
+        if (string.IsNullOrWhiteSpace(results.SpeedscopePath))
+        {
+            AnsiConsole.MarkupLine("[red]Timeline view requires speedscope data (not available)[/]");
+        }
+        else
+        {
+            PrintSection("TIMELINE VIEW");
+            var spans = CpuTimelineFormatter.ParseSpeedscopeSpans(results.SpeedscopePath);
+
+            // Apply runtime filter if needed
+            Func<CpuTimelineFormatter.ProfileSpan, bool>? predicate = null;
+            if (!includeRuntime)
+            {
+                predicate = span => !IsRuntimeNoise(span.Name);
+            }
+
+            var timeline = CpuTimelineFormatter.Format(
+                spans,
+                width: timelineWidth,
+                maxSpans: timelineMaxSpans,
+                minDurationMs: timelineMinDuration,
+                predicate: predicate);
+
+            Console.WriteLine(timeline);
+        }
     }
 
     var allFunctions = results.AllFunctions;
@@ -3057,6 +3093,10 @@ void ApplyInputDefaults(
 
 // Command-line setup
 var cpuOption = new Option<bool>("--cpu", "Run CPU profiling only");
+var timelineOption = new Option<bool>("--timeline", "Show CPU profile as visual timeline (use with --cpu)");
+var timelineWidthOption = new Option<int>("--timeline-width", () => 60, "Timeline bar width in characters (default: 60)");
+var timelineMaxSpansOption = new Option<int>("--timeline-max-spans", () => 100, "Maximum spans to display (default: 100)");
+var timelineMinDurationOption = new Option<double>("--timeline-min-duration", () => 0.1, "Minimum span duration in ms (default: 0.1)");
 var memoryOption = new Option<bool>("--memory", "Run memory profiling only");
 var exceptionOption = new Option<bool>("--exception", "Run exception profiling only");
 exceptionOption.AddAlias("--exceptions");
@@ -3080,6 +3120,10 @@ commandArg.Arity = ArgumentArity.ZeroOrMore;
 var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Contention/Heap profiling for .NET commands")
 {
     cpuOption,
+    timelineOption,
+    timelineWidthOption,
+    timelineMaxSpansOption,
+    timelineMinDurationOption,
     memoryOption,
     exceptionOption,
     contentionOption,
@@ -3103,6 +3147,10 @@ rootCommand.TreatUnmatchedTokensAsErrors = false;
 rootCommand.SetHandler(context =>
 {
     var cpu = context.ParseResult.GetValueForOption(cpuOption);
+    var timeline = context.ParseResult.GetValueForOption(timelineOption);
+    var timelineWidth = context.ParseResult.GetValueForOption(timelineWidthOption);
+    var timelineMaxSpans = context.ParseResult.GetValueForOption(timelineMaxSpansOption);
+    var timelineMinDuration = context.ParseResult.GetValueForOption(timelineMinDurationOption);
     var memory = context.ParseResult.GetValueForOption(memoryOption);
     var exception = context.ParseResult.GetValueForOption(exceptionOption);
     var contention = context.ParseResult.GetValueForOption(contentionOption);
@@ -3177,7 +3225,11 @@ rootCommand.SetHandler(context =>
             callTreeWidth,
             callTreeRootMode,
             callTreeSelf,
-            callTreeSiblingCutoff);
+            callTreeSiblingCutoff,
+            timeline,
+            timelineWidth,
+            timelineMaxSpans,
+            timelineMinDuration);
     }
 
     if (runMemory)
