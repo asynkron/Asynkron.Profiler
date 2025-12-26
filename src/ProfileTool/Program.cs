@@ -339,6 +339,7 @@ CpuProfileResult? AnalyzeSpeedscope(string speedscopePath)
                     frameTimes.TryGetValue(frameIdx, out var time);
                     frameTimes[frameIdx] = time + duration;
                     node.Total += duration;
+                    node.UpdateTiming(openTime, at); // Track timing for timeline
                     if (stack.Count == 0)
                     {
                         callTreeTotal += duration;
@@ -357,6 +358,15 @@ CpuProfileResult? AnalyzeSpeedscope(string speedscopePath)
     }
     callTreeRoot.Total = callTreeTotal;
     callTreeRoot.Calls = SumCallTreeCalls(callTreeRoot);
+
+    // Propagate timing from children to root
+    foreach (var child in callTreeRoot.Children.Values)
+    {
+        if (child.HasTiming)
+        {
+            callTreeRoot.UpdateTiming(child.MinStart, child.MaxEnd);
+        }
+    }
 
     foreach (var (frameIdx, timeSpent) in frameTimes.OrderByDescending(kv => kv.Value))
     {
@@ -390,9 +400,7 @@ void PrintCpuResults(
     bool showSelfTimeTree,
     int callTreeSiblingCutoffPercent,
     bool showTimeline = false,
-    int timelineWidth = 60,
-    int timelineMaxSpans = 100,
-    double timelineMinDuration = 0.1)
+    int timelineWidth = 40)
 {
     if (results == null)
     {
@@ -406,36 +414,7 @@ void PrintCpuResults(
         AnsiConsole.MarkupLine($"[dim]{description}[/]");
     }
 
-    // Show timeline view if requested
-    if (showTimeline)
-    {
-        if (string.IsNullOrWhiteSpace(results.SpeedscopePath))
-        {
-            AnsiConsole.MarkupLine("[red]Timeline view requires speedscope data (not available)[/]");
-        }
-        else
-        {
-            PrintSection("TIMELINE VIEW");
-            var spans = CpuTimelineFormatter.ParseSpeedscopeSpans(results.SpeedscopePath);
-
-            // Apply runtime filter if needed
-            Func<CpuTimelineFormatter.ProfileSpan, bool>? predicate = null;
-            if (!includeRuntime)
-            {
-                predicate = span => !IsRuntimeNoise(span.Name);
-            }
-
-            var timeline = CpuTimelineFormatter.Format(
-                spans,
-                width: timelineWidth,
-                maxSpans: timelineMaxSpans,
-                minDurationMs: timelineMinDuration,
-                predicate: predicate);
-
-            Console.WriteLine(timeline);
-        }
-    }
-
+    var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
     var allFunctions = results.AllFunctions;
     var totalTime = results.TotalTime;
 
@@ -506,7 +485,6 @@ void PrintCpuResults(
 
     AnsiConsole.Write(summaryTable);
 
-    var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
     AnsiConsole.Write(BuildCallTree(
         results,
         useSelfTime: false,
@@ -515,7 +493,9 @@ void PrintCpuResults(
         callTreeDepth,
         callTreeWidth,
         callTreeRootMode,
-        callTreeSiblingCutoffPercent));
+        callTreeSiblingCutoffPercent,
+        showTimeline,
+        timelineWidth));
     if (showSelfTimeTree)
     {
         AnsiConsole.Write(BuildCallTree(
@@ -526,7 +506,8 @@ void PrintCpuResults(
             callTreeDepth,
             callTreeWidth,
             callTreeRootMode,
-            callTreeSiblingCutoffPercent));
+            callTreeSiblingCutoffPercent,
+            showTimeline: false)); // Don't show timeline on self-time tree
     }
 }
 
@@ -2294,7 +2275,9 @@ IRenderable BuildCallTree(
     int maxDepth,
     int maxWidth,
     string? rootMode,
-    int siblingCutoffPercent)
+    int siblingCutoffPercent,
+    bool showTimeline = false,
+    int timelineWidth = 40)
 {
     var callTreeRoot = results.CallTreeRoot;
     var totalTime = results.CallTreeTotal;
@@ -2320,7 +2303,43 @@ IRenderable BuildCallTree(
         }
     }
 
-    var rootLabel = FormatCallTreeLine(rootNode, rootTotal, useSelfTime, isRoot: true);
+    // If timeline is enabled, render tree + timeline as single formatted lines
+    if (showTimeline && rootNode.HasTiming)
+    {
+        // Get terminal width, default to 160 if not available
+        var terminalWidth = Console.WindowWidth > 0 ? Console.WindowWidth : 160;
+
+        // Timeline width as specified, tree gets the rest
+        var actualTimelineWidth = Math.Max(20, timelineWidth);
+        var treeColumnWidth = terminalWidth - actualTimelineWidth - 2; // -2 for spacing
+
+        var timeline = new TimelineContext
+        {
+            RootStart = rootNode.MinStart,
+            RootEnd = rootNode.MaxEnd,
+            BarWidth = actualTimelineWidth,
+            TextWidth = treeColumnWidth,
+            MaxNameLength = 200,
+            MaxDepth = maxDepth
+        };
+
+        // Collect all rows by walking the tree
+        var rows = new List<(string TreeText, int VisibleLength, string TimelineBar)>();
+        CollectTimelineRows(rows, rootNode, rootTotal, useSelfTime, "", true, includeRuntime, 0, maxDepth, maxWidth, siblingCutoffPercent, timeline);
+
+        // Build combined output - each row is tree + padding + timeline on one line
+        var outputLines = new List<IRenderable> { new Markup($"[bold yellow]{title}[/]") };
+        foreach (var (treeText, visibleLength, timelineBar) in rows)
+        {
+            var padding = Math.Max(0, treeColumnWidth - visibleLength);
+            outputLines.Add(new Markup($"{treeText}{new string(' ', padding)}{timelineBar}"));
+        }
+
+        return new Rows(outputLines);
+    }
+
+    // No timeline - use regular tree
+    var rootLabel = FormatCallTreeLine(rootNode, rootTotal, useSelfTime, isRoot: true, isLeaf: false, null, depth: 0);
     var tree = new Tree(rootLabel)
     {
         Style = new Style(Color.Grey),
@@ -2344,7 +2363,7 @@ IRenderable BuildCallTree(
                          maxWidth,
                          siblingCutoffPercent,
                          IsRuntimeNoise).Count == 0;
-        var childNode = tree.AddNode(FormatCallTreeLine(child, rootTotal, useSelfTime, isRoot: false, isLeaf));
+        var childNode = tree.AddNode(FormatCallTreeLine(child, rootTotal, useSelfTime, isRoot: false, isLeaf, null, depth: 1));
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2356,13 +2375,119 @@ IRenderable BuildCallTree(
                 2,
                 maxDepth,
                 maxWidth,
-                siblingCutoffPercent);
+                siblingCutoffPercent,
+                null);
         }
     }
 
     return new Rows(
         new Markup($"[bold yellow]{title}[/]"),
         tree);
+}
+
+void CollectTimelineRows(
+    List<(string TreeText, int VisibleLength, string TimelineBar)> rows,
+    CallTreeNode node,
+    double totalTime,
+    bool useSelfTime,
+    string prefix,
+    bool isRoot,
+    bool includeRuntime,
+    int depth,
+    int maxDepth,
+    int maxWidth,
+    int siblingCutoffPercent,
+    TimelineContext timeline,
+    string? continuationPrefix = null)
+{
+    // Format this node
+    var (treeText, visibleLength) = FormatCallTreeLineSimple(node, totalTime, useSelfTime, isRoot, prefix, timeline.TextWidth);
+    var timelineBar = RenderTimelineBar(node, timeline);
+    rows.Add((treeText, visibleLength, timelineBar));
+
+    if (depth >= maxDepth)
+    {
+        return;
+    }
+
+    // Use continuation prefix for building children's prefixes
+    var basePrefix = continuationPrefix ?? prefix;
+
+    var children = CallTreeFilters.GetVisibleChildren(
+        node,
+        includeRuntime,
+        useSelfTime,
+        maxWidth,
+        siblingCutoffPercent,
+        IsRuntimeNoise);
+
+    for (var i = 0; i < children.Count; i++)
+    {
+        var child = children[i];
+        var isLast = i == children.Count - 1;
+        var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
+
+        // Build prefix: connector for this node, continuation for its children
+        var connector = isLast ? "└─ " : "├─ ";
+        var continuation = isLast ? "   " : "│  ";
+
+        CollectTimelineRows(
+            rows,
+            child,
+            totalTime,
+            useSelfTime,
+            basePrefix + connector,  // This node's full prefix
+            isRoot: false,
+            includeRuntime,
+            depth + 1,
+            isSpecialLeaf ? depth + 1 : maxDepth,
+            maxWidth,
+            siblingCutoffPercent,
+            timeline,
+            basePrefix + continuation);  // Continuation prefix for grandchildren
+    }
+}
+
+(string Text, int VisibleLength) FormatCallTreeLineSimple(
+    CallTreeNode node,
+    double totalTime,
+    bool useSelfTime,
+    bool isRoot,
+    string prefix,
+    int maxWidth)
+{
+    var matchName = GetCallTreeMatchName(node);
+    var displayName = NameFormatter.FormatMethodDisplayName(matchName);
+
+    var timeSpent = isRoot && useSelfTime
+        ? GetCallTreeTime(node, useSelfTime: false)
+        : GetCallTreeTime(node, useSelfTime);
+    var calls = node.Calls;
+
+    var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
+    var timeText = timeSpent.ToString("F2", CultureInfo.InvariantCulture);
+    var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
+    var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
+
+    // Calculate visible length of prefix + stats: "prefix12.34 ms 56.7% 1,234x "
+    var statsLength = prefix.Length + timeText.Length + 4 + pctText.Length + 2 + callsText.Length + 2; // " ms" + "% " + "x "
+    var maxNameLength = maxWidth - statsLength - 1; // -1 for trailing space
+
+    // Truncate name if needed
+    var truncatedName = displayName;
+    if (maxNameLength > 3 && displayName.Length > maxNameLength)
+    {
+        truncatedName = displayName[..(maxNameLength - 3)] + "...";
+    }
+    else if (maxNameLength <= 3)
+    {
+        truncatedName = "...";
+    }
+
+    var escapedName = Markup.Escape(truncatedName);
+    var visibleLength = statsLength + truncatedName.Length;
+
+    return ($"[dim]{Markup.Escape(prefix)}[/][green]{timeText} ms[/] [cyan]{pctText}%[/] [blue]{callsText}x[/] {escapedName}", visibleLength);
 }
 
 void AddCallTreeChildren(
@@ -2374,7 +2499,8 @@ void AddCallTreeChildren(
     int depth,
     int maxDepth,
     int maxWidth,
-    int siblingCutoffPercent)
+    int siblingCutoffPercent,
+    TimelineContext? timeline = null)
 {
     if (depth > maxDepth)
     {
@@ -2404,7 +2530,7 @@ void AddCallTreeChildren(
             : Array.Empty<CallTreeNode>();
         var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
 
-        var childNode = parent.AddNode(FormatCallTreeLine(child, totalTime, useSelfTime, isRoot: false, isLeaf));
+        var childNode = parent.AddNode(FormatCallTreeLine(child, totalTime, useSelfTime, isRoot: false, isLeaf, timeline, depth));
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2416,7 +2542,8 @@ void AddCallTreeChildren(
                 depth + 1,
                 maxDepth,
                 maxWidth,
-                siblingCutoffPercent);
+                siblingCutoffPercent,
+                timeline);
         }
     }
 }
@@ -2475,13 +2602,31 @@ string FormatCallTreeLine(
     double totalTime,
     bool useSelfTime,
     bool isRoot,
-    bool isLeaf = false)
+    bool isLeaf = false,
+    TimelineContext? timeline = null,
+    int depth = 0)
 {
     var matchName = GetCallTreeMatchName(node);
     var displayName = matchName;
-    if (displayName.Length > 80)
+
+    // Calculate max name length based on actual depth (shallower = more space)
+    int maxNameLen;
+    if (timeline != null)
     {
-        displayName = displayName[..77] + "...";
+        // Tree guides take ~4 chars per level (can be more with branches: "│  " + "└─ ")
+        var treeGuideWidth = depth * 4;
+        // Stats prefix is ~28 chars for "12345.67 ms 100.0% 1,234x "
+        // Available for name = text width - tree guides - stats
+        maxNameLen = Math.Max(15, timeline.TextWidth - treeGuideWidth - 28);
+    }
+    else
+    {
+        maxNameLen = 80;
+    }
+
+    if (displayName.Length > maxNameLen)
+    {
+        displayName = displayName[..(maxNameLen - 3)] + "...";
     }
 
     var timeSpent = isRoot && useSelfTime
@@ -2495,7 +2640,109 @@ string FormatCallTreeLine(
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var nameText = FormatCallTreeName(displayName, matchName, isLeaf);
 
-    return $"[green]{timeText} ms[/] [cyan]{pctText}%[/] [blue]{callsText}x[/] {nameText}";
+    var baseLine = $"[green]{timeText} ms[/] [cyan]{pctText}%[/] [blue]{callsText}x[/] {nameText}";
+
+    // Add timeline bar if enabled
+    if (timeline != null && node.HasTiming)
+    {
+        var bar = RenderTimelineBar(node, timeline);
+        // Calculate padding to align timeline, compensating for tree guide indentation
+        var visibleLength = EstimateVisibleLength(baseLine);
+        var padding = timeline.GetPaddingForDepth(depth, visibleLength);
+        var paddedLine = baseLine + new string(' ', padding);
+        return $"{paddedLine} [dim]│[/] {bar}";
+    }
+
+    return baseLine;
+}
+
+int EstimateVisibleLength(string markup)
+{
+    // Remove Spectre.Console markup tags to estimate visible length
+    var result = markup;
+    while (true)
+    {
+        var start = result.IndexOf('[');
+        if (start < 0) break;
+        var end = result.IndexOf(']', start);
+        if (end < 0) break;
+        result = result.Remove(start, end - start + 1);
+    }
+    return result.Length;
+}
+
+string RenderTimelineBar(CallTreeNode node, TimelineContext ctx)
+{
+    if (!node.HasTiming || ctx.RootDuration <= 0)
+    {
+        return new string(' ', ctx.BarWidth);
+    }
+
+    var buffer = new char[ctx.BarWidth];
+    Array.Fill(buffer, ' ');
+
+    // Calculate start position and width relative to root
+    var startOffset = node.MinStart - ctx.RootStart;
+    var startRatio = Math.Clamp(startOffset / ctx.RootDuration, 0, 1);
+    var durationRatio = Math.Clamp((node.MaxEnd - node.MinStart) / ctx.RootDuration, 0, 1);
+
+    // Use 8 sub-character units per character for smooth rendering
+    var scaledWidth = ctx.BarWidth * 8;
+    var startUnit = (int)Math.Round(startRatio * scaledWidth);
+    var durationUnits = Math.Max(1, (int)Math.Round(durationRatio * scaledWidth));
+    var endUnit = Math.Min(startUnit + durationUnits, scaledWidth);
+
+    for (var column = 0; column < ctx.BarWidth; column++)
+    {
+        var columnStart = column * 8;
+        var columnEnd = columnStart + 8;
+        var overlap = Math.Max(0, Math.Min(columnEnd, endUnit) - Math.Max(columnStart, startUnit));
+        if (overlap <= 0)
+        {
+            continue;
+        }
+
+        var includesStart = startUnit >= columnStart && startUnit < columnEnd;
+        var includesEnd = endUnit > columnStart && endUnit <= columnEnd;
+
+        buffer[column] = overlap switch
+        {
+            >= 8 => '█',
+            _ when includesStart && !includesEnd => SelectRightBlock(overlap / 8.0),
+            _ when includesEnd && !includesStart => SelectLeftBlock(overlap / 8.0),
+            _ when includesStart && includesEnd => SelectLeftBlock(overlap / 8.0),
+            _ => SelectLeftBlock(overlap / 8.0)
+        };
+    }
+
+    return $"[cyan]{new string(buffer)}[/]";
+}
+
+char SelectLeftBlock(double fraction)
+{
+    return fraction switch
+    {
+        >= 1.0 => '█',
+        >= 0.875 => '▉',
+        >= 0.75 => '▊',
+        >= 0.625 => '▋',
+        >= 0.5 => '▌',
+        >= 0.375 => '▍',
+        >= 0.25 => '▎',
+        >= 0.125 => '▏',
+        _ => ' '
+    };
+}
+
+char SelectRightBlock(double fraction)
+{
+    return fraction switch
+    {
+        >= 1.0 => '█',
+        >= 0.5 => '▐',
+        >= 0.125 => '▕',
+        _ => ' '
+    };
 }
 
 string FormatExceptionCallTreeLine(
@@ -3093,10 +3340,8 @@ void ApplyInputDefaults(
 
 // Command-line setup
 var cpuOption = new Option<bool>("--cpu", "Run CPU profiling only");
-var timelineOption = new Option<bool>("--timeline", "Show CPU profile as visual timeline (use with --cpu)");
-var timelineWidthOption = new Option<int>("--timeline-width", () => 60, "Timeline bar width in characters (default: 60)");
-var timelineMaxSpansOption = new Option<int>("--timeline-max-spans", () => 100, "Maximum spans to display (default: 100)");
-var timelineMinDurationOption = new Option<double>("--timeline-min-duration", () => 0.1, "Minimum span duration in ms (default: 0.1)");
+var timelineOption = new Option<bool>("--timeline", "Show inline timeline bars in call tree (use with --cpu)");
+var timelineWidthOption = new Option<int>("--timeline-width", () => 40, "Timeline bar width in characters (default: 40)");
 var memoryOption = new Option<bool>("--memory", "Run memory profiling only");
 var exceptionOption = new Option<bool>("--exception", "Run exception profiling only");
 exceptionOption.AddAlias("--exceptions");
@@ -3122,8 +3367,6 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Cont
     cpuOption,
     timelineOption,
     timelineWidthOption,
-    timelineMaxSpansOption,
-    timelineMinDurationOption,
     memoryOption,
     exceptionOption,
     contentionOption,
@@ -3149,8 +3392,6 @@ rootCommand.SetHandler(context =>
     var cpu = context.ParseResult.GetValueForOption(cpuOption);
     var timeline = context.ParseResult.GetValueForOption(timelineOption);
     var timelineWidth = context.ParseResult.GetValueForOption(timelineWidthOption);
-    var timelineMaxSpans = context.ParseResult.GetValueForOption(timelineMaxSpansOption);
-    var timelineMinDuration = context.ParseResult.GetValueForOption(timelineMinDurationOption);
     var memory = context.ParseResult.GetValueForOption(memoryOption);
     var exception = context.ParseResult.GetValueForOption(exceptionOption);
     var contention = context.ParseResult.GetValueForOption(contentionOption);
@@ -3227,9 +3468,7 @@ rootCommand.SetHandler(context =>
             callTreeSelf,
             callTreeSiblingCutoff,
             timeline,
-            timelineWidth,
-            timelineMaxSpans,
-            timelineMinDuration);
+            timelineWidth);
     }
 
     if (runMemory)
