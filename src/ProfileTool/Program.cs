@@ -2715,7 +2715,47 @@ string RenderTimelineBar(CallTreeNode node, TimelineContext ctx)
         };
     }
 
-    return $"[cyan]{new string(buffer)}[/]";
+    // Color based on percentage: 5% = green, 50% = yellow/orange, 100% = red
+    var pct = durationRatio * 100;
+    var color = GetHeatColor(pct);
+
+    return $"[{color}]{new string(buffer)}[/]";
+}
+
+string GetHeatColor(double percentage)
+{
+    // Clamp percentage to 0-100
+    percentage = Math.Clamp(percentage, 0, 100);
+
+    int r, g, b;
+
+    if (percentage <= 5)
+    {
+        // 0-5%: Pure green
+        r = 0;
+        g = 200;
+        b = 0;
+    }
+    else if (percentage <= 50)
+    {
+        // 5-50%: Green to Yellow/Orange
+        // Interpolate from green (0,200,0) to orange (255,165,0)
+        var t = (percentage - 5) / 45.0;
+        r = (int)(0 + t * 255);
+        g = (int)(200 - t * 35); // 200 -> 165
+        b = 0;
+    }
+    else
+    {
+        // 50-100%: Orange to Red
+        // Interpolate from orange (255,165,0) to red (255,0,0)
+        var t = (percentage - 50) / 50.0;
+        r = 255;
+        g = (int)(165 - t * 165); // 165 -> 0
+        b = 0;
+    }
+
+    return $"rgb({r},{g},{b})";
 }
 
 char SelectLeftBlock(double fraction)
