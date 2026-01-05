@@ -2611,7 +2611,7 @@ void CollectTimelineRows(
     var escapedName = Markup.Escape(truncatedName);
     if (ShouldStopAtLeaf(matchName))
     {
-        escapedName = $"[plum1]{escapedName}[/]";
+        escapedName = $"[orange1]{escapedName}[/]";
     }
 
     var visibleLength = statsLength + truncatedName.Length;
@@ -3156,7 +3156,7 @@ string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
         return $"[white]{escaped}[/]";
     }
 
-    const string leafHighlightColor = "plum1";
+    const string leafHighlightColor = "orange1";
     if (ShouldStopAtLeaf(matchName))
     {
         return $"[{leafHighlightColor}]{escaped}[/]";
