@@ -14,7 +14,7 @@ using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
-const string LeafHighlightColor = "orange1";
+const string LeafHighlightColor = "#9a9a9a";
 
 void PrintSection(string text)
 {
