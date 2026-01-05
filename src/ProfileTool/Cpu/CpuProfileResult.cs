@@ -7,4 +7,7 @@ internal sealed record CpuProfileResult(
     double TotalTime,
     CallTreeNode CallTreeRoot,
     double CallTreeTotal,
-    string? SpeedscopePath = null);
+    string? SpeedscopePath,
+    string TimeUnitLabel,
+    string CountLabel,
+    string CountSuffix);

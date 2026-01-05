@@ -5,7 +5,6 @@ using System.CommandLine.Parsing;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
-using System.Text.Json;
 using System.Text;
 using System.Threading;
 using Asynkron.Profiler;
@@ -228,8 +227,6 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
 
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
     var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.nettrace");
-    var speedscopeBase = Path.Combine(outputDir, $"{label}_{timestamp}");
-    var speedscopeFile = speedscopeBase + ".speedscope.json";
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
@@ -254,137 +251,159 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
                 return null;
             }
 
-            ctx.Status("Converting trace to speedscope format...");
-            var convertArgs = new[]
-            {
-                "convert",
-                traceFile,
-                "--format",
-                "Speedscope",
-                "--output",
-                speedscopeBase
-            };
-            var convert = RunProcess("dotnet-trace", convertArgs, timeoutMs: 120000);
-            if (!convert.Success || !File.Exists(speedscopeFile))
-            {
-                AnsiConsole.MarkupLine($"[red]Speedscope conversion failed:[/] {Markup.Escape(convert.StdErr)}");
-                return null;
-            }
-
             ctx.Status("Analyzing profile data...");
-            return AnalyzeSpeedscope(speedscopeFile);
+            return AnalyzeCpuTrace(traceFile);
         });
 }
 
 CpuProfileResult? AnalyzeSpeedscope(string speedscopePath)
 {
-    var json = File.ReadAllText(speedscopePath);
-    using var doc = JsonDocument.Parse(json);
-    var root = doc.RootElement;
+    return SpeedscopeParser.ParseFile(speedscopePath);
+}
 
-    var frames = root.GetProperty("shared").GetProperty("frames");
-    var profile = root.GetProperty("profiles")[0];
-
-    var framesList = new List<string>();
-    foreach (var frame in frames.EnumerateArray())
+CpuProfileResult? AnalyzeCpuTrace(string traceFile)
+{
+    try
     {
-        framesList.Add(frame.GetProperty("name").GetString() ?? "Unknown");
-    }
+        var frameTotals = new Dictionary<string, double>(StringComparer.Ordinal);
+        var frameCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var frameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
+        var framesList = new List<string>();
+        var callTreeRoot = new CallTreeNode(-1, "Total");
+        var callTreeTotal = 0d;
+        var totalSamples = 0L;
+        double? lastSampleTimeMs = null;
 
-    var frameTimes = new Dictionary<int, double>();
-    var frameSelfTimes = new Dictionary<int, double>();
-    var frameCounts = new Dictionary<int, int>();
-    var callTreeRoot = new CallTreeNode(-1, "Total");
-    var stack = new List<(CallTreeNode Node, double Start, int FrameIdx)>();
-    var hasLast = false;
-    var lastAt = 0d;
-    var callTreeTotal = 0d;
-
-    if (profile.TryGetProperty("events", out var events))
-    {
-        foreach (var evt in events.EnumerateArray())
+        var etlxPath = traceFile;
+        if (traceFile.EndsWith(".nettrace", StringComparison.OrdinalIgnoreCase))
         {
-            var eventType = evt.GetProperty("type").GetString();
-            var frameIdx = evt.GetProperty("frame").GetInt32();
-            var at = evt.GetProperty("at").GetDouble();
+            var fileName = Path.GetFileNameWithoutExtension(traceFile);
+            var targetPath = Path.Combine(outputDir, $"{fileName}.etlx");
+            var options = new TraceLogOptions { ConversionLog = TextWriter.Null };
+            etlxPath = TraceLog.CreateFromEventPipeDataFile(traceFile, targetPath, options);
+        }
 
-            if (hasLast && stack.Count > 0)
+        using var traceLog = TraceLog.OpenOrConvert(etlxPath, new TraceLogOptions { ConversionLog = TextWriter.Null });
+        using var source = traceLog.Events.GetSource();
+
+        const string sampleProfilerProvider = "Microsoft-DotNETCore-SampleProfiler";
+
+        source.Dynamic.All += data =>
+        {
+            if (!string.Equals(data.ProviderName, sampleProfilerProvider, StringComparison.Ordinal))
             {
-                var topIdx = stack[^1].FrameIdx;
-                frameSelfTimes.TryGetValue(topIdx, out var selfTime);
-                var delta = at - lastAt;
-                frameSelfTimes[topIdx] = selfTime + delta;
-                stack[^1].Node.Self += delta;
+                return;
             }
 
-            hasLast = true;
-            lastAt = at;
-
-            if (string.Equals(eventType, "O", StringComparison.Ordinal)) // Open
+            var stack = data.CallStack();
+            if (stack == null)
             {
-                var parentNode = stack.Count > 0 ? stack[^1].Node : callTreeRoot;
-                var childNode = GetOrCreateCallTreeChild(parentNode, frameIdx, framesList);
-                childNode.Calls += 1;
-                stack.Add((childNode, at, frameIdx));
-                frameCounts.TryGetValue(frameIdx, out var count);
-                frameCounts[frameIdx] = count + 1;
+                return;
             }
-            else if (string.Equals(eventType, "C", StringComparison.Ordinal)) // Close
+
+            var timeMs = data.TimeStampRelativeMSec;
+            var weight = 0d;
+            if (lastSampleTimeMs.HasValue)
             {
-                if (stack.Count > 0 && stack[^1].FrameIdx == frameIdx)
+                weight = timeMs - lastSampleTimeMs.Value;
+                if (weight < 0)
                 {
-                    var (node, openTime, _) = stack[^1];
-                    stack.RemoveAt(stack.Count - 1);
-                    var duration = at - openTime;
-                    frameTimes.TryGetValue(frameIdx, out var time);
-                    frameTimes[frameIdx] = time + duration;
-                    node.Total += duration;
-                    node.UpdateTiming(openTime, at); // Track timing for timeline
-                    if (stack.Count == 0)
-                    {
-                        callTreeTotal += duration;
-                    }
+                    weight = 0;
                 }
             }
-        }
-    }
+            lastSampleTimeMs = timeMs;
 
-    var allFunctions = new List<FunctionSample>();
-    double totalTime = frameTimes.Values.Sum();
+            var frames = EnumerateCpuFrames(stack).ToList();
+            if (frames.Count == 0)
+            {
+                frames.Add("Unknown");
+            }
 
-    if (callTreeTotal <= 0)
-    {
-        callTreeTotal = SumCallTreeTotals(callTreeRoot);
-    }
-    callTreeRoot.Total = callTreeTotal;
-    callTreeRoot.Calls = SumCallTreeCalls(callTreeRoot);
+            frames.Reverse();
 
-    // Propagate timing from children to root
-    foreach (var child in callTreeRoot.Children.Values)
-    {
-        if (child.HasTiming)
+            totalSamples++;
+            callTreeTotal += weight;
+
+            var node = callTreeRoot;
+            for (var i = 0; i < frames.Count; i++)
+            {
+                var frame = frames[i];
+                if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                {
+                    frameIdx = framesList.Count;
+                    framesList.Add(frame);
+                    frameIndices[frame] = frameIdx;
+                }
+
+                if (!node.Children.TryGetValue(frameIdx, out var child))
+                {
+                    child = new CallTreeNode(frameIdx, frame);
+                    node.Children[frameIdx] = child;
+                }
+
+                if (weight > 0)
+                {
+                    child.Total += weight;
+                }
+
+                if (child.Calls < int.MaxValue)
+                {
+                    child.Calls += 1;
+                }
+
+                frameCounts.TryGetValue(frame, out var count);
+                frameCounts[frame] = count + 1;
+
+                frameTotals.TryGetValue(frame, out var total);
+                frameTotals[frame] = total + weight;
+
+                node = child;
+            }
+
+            if (weight > 0)
+            {
+                node.Self += weight;
+            }
+        };
+
+        source.Process();
+
+        if (totalSamples == 0)
         {
-            callTreeRoot.UpdateTiming(child.MinStart, child.MaxEnd);
+            AnsiConsole.MarkupLine("[yellow]No CPU samples found in trace.[/]");
+            return null;
         }
-    }
 
-    foreach (var (frameIdx, timeSpent) in frameTimes.OrderByDescending(kv => kv.Value))
+        callTreeRoot.Total = callTreeTotal;
+        callTreeRoot.Calls = totalSamples > int.MaxValue ? int.MaxValue : (int)totalSamples;
+
+        var allFunctions = frameTotals
+            .OrderByDescending(kv => kv.Value)
+            .Select(kv =>
+            {
+                frameCounts.TryGetValue(kv.Key, out var calls);
+                frameIndices.TryGetValue(kv.Key, out var frameIdx);
+                return new FunctionSample(kv.Key, kv.Value, calls, frameIdx);
+            })
+            .ToList();
+
+        var totalTime = frameTotals.Values.Sum();
+
+        return new CpuProfileResult(
+            allFunctions,
+            totalTime,
+            callTreeRoot,
+            callTreeTotal,
+            traceFile,
+            "ms",
+            "Samples",
+            " samp");
+    }
+    catch (Exception ex)
     {
-        var name = frameIdx < framesList.Count ? framesList[frameIdx] : "Unknown";
-        frameCounts.TryGetValue(frameIdx, out var calls);
-
-        var entry = new FunctionSample(name, timeSpent, calls, frameIdx);
-        allFunctions.Add(entry);
-
-        _ = name;
+        AnsiConsole.MarkupLine($"[yellow]CPU trace parse failed:[/] {Markup.Escape(ex.Message)}");
+        return null;
     }
-
-    return new CpuProfileResult(
-        allFunctions,
-        totalTime,
-        callTreeRoot,
-        callTreeTotal,
-        speedscopePath);
 }
 
 void PrintCpuResults(
@@ -417,6 +436,9 @@ void PrintCpuResults(
     var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
     var allFunctions = results.AllFunctions;
     var totalTime = results.TotalTime;
+    var timeUnitLabel = results.TimeUnitLabel;
+    var countLabel = results.CountLabel;
+    var countSuffix = results.CountSuffix;
 
     // Top functions overall - using Spectre table
     AnsiConsole.WriteLine();
@@ -430,11 +452,14 @@ void PrintCpuResults(
     var topTitle = includeRuntime && string.IsNullOrWhiteSpace(functionFilter)
         ? "Top Functions (All)"
         : "Top Functions (Filtered)";
+    var timeColumnLabel = string.Equals(timeUnitLabel, "samples", StringComparison.OrdinalIgnoreCase)
+        ? "Samples"
+        : $"Time ({timeUnitLabel})";
     var table = new Table()
         .Border(TableBorder.None)
         .Title($"[bold]{topTitle}[/]")
-        .AddColumn(new TableColumn("[yellow]Time (ms)[/]").RightAligned())
-        .AddColumn(new TableColumn("[yellow]Calls[/]").RightAligned())
+        .AddColumn(new TableColumn($"[yellow]{timeColumnLabel}[/]").RightAligned())
+        .AddColumn(new TableColumn($"[yellow]{countLabel}[/]").RightAligned())
         .AddColumn(new TableColumn("[yellow]Function[/]"));
 
     foreach (var entry in filteredList.Take(15))
@@ -444,7 +469,7 @@ void PrintCpuResults(
 
         var timeMs = entry.TimeMs;
         var calls = entry.Calls;
-        var timeMsText = timeMs.ToString("F2", CultureInfo.InvariantCulture);
+        var timeMsText = FormatCpuTime(timeMs, timeUnitLabel);
         var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
         var funcText = Markup.Escape(funcName);
         if (IsUnmanagedFrame(funcName))
@@ -483,9 +508,13 @@ void PrintCpuResults(
         .AddColumn("")
         .AddColumn("");
 
-    var totalTimeText = totalTime.ToString("F2", CultureInfo.InvariantCulture);
+    var totalTimeText = FormatCpuTime(totalTime, timeUnitLabel);
     var hotCountText = allFunctions.Count.ToString(CultureInfo.InvariantCulture);
-    summaryTable.AddRow("[bold]Total Time[/]", $"[green]{totalTimeText} ms[/]");
+    var totalLabel = string.Equals(timeUnitLabel, "samples", StringComparison.OrdinalIgnoreCase)
+        ? "Total Samples"
+        : "Total Time";
+    summaryTable.AddRow($"[bold]{totalLabel}[/]", $"[green]{totalTimeText} {timeUnitLabel}[/]");
+    summaryTable.AddRow("[bold]Input Unit[/]", $"[green]{timeUnitLabel}[/]");
     summaryTable.AddRow("[bold]Hot Functions[/]", $"[blue]{hotCountText}[/] functions profiled");
 
     AnsiConsole.Write(summaryTable);
@@ -499,6 +528,8 @@ void PrintCpuResults(
         callTreeWidth,
         callTreeRootMode,
         callTreeSiblingCutoffPercent,
+        timeUnitLabel,
+        countSuffix,
         showTimeline,
         timelineWidth));
     if (showSelfTimeTree)
@@ -512,6 +543,8 @@ void PrintCpuResults(
             callTreeWidth,
             callTreeRootMode,
             callTreeSiblingCutoffPercent,
+            timeUnitLabel,
+            countSuffix,
             showTimeline: false)); // Don't show timeline on self-time tree
     }
 }
@@ -530,37 +563,13 @@ CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
         return AnalyzeSpeedscope(inputPath);
     }
 
-    if (extension != ".nettrace")
+    if (extension != ".nettrace" && extension != ".etlx")
     {
         AnsiConsole.MarkupLine($"[red]Unsupported CPU input:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
-    {
-        return null;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var speedscopeBase = Path.Combine(outputDir, $"{label}_{timestamp}");
-    var speedscopeFile = speedscopeBase + ".speedscope.json";
-    var convertArgs = new[]
-    {
-        "convert",
-        inputPath,
-        "--format",
-        "Speedscope",
-        "--output",
-        speedscopeBase
-    };
-    var convert = RunProcess("dotnet-trace", convertArgs, timeoutMs: 120000);
-    if (!convert.Success || !File.Exists(speedscopeFile))
-    {
-        AnsiConsole.MarkupLine($"[red]Speedscope conversion failed:[/] {Markup.Escape(convert.StdErr)}");
-        return null;
-    }
-
-    return AnalyzeSpeedscope(speedscopeFile);
+    return AnalyzeCpuTrace(inputPath);
 }
 
 MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
@@ -1330,6 +1339,38 @@ IEnumerable<string> EnumerateExceptionFrames(TraceCallStack? stack)
     }
 }
 
+IEnumerable<string> EnumerateCpuFrames(TraceCallStack? stack)
+{
+    if (stack == null)
+    {
+        yield break;
+    }
+
+    var lastWasUnknown = false;
+    for (var current = stack; current != null; current = current.Caller)
+    {
+        var methodName = current.CodeAddress?.FullMethodName;
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            methodName = current.CodeAddress?.Method?.FullMethodName;
+        }
+
+        if (string.IsNullOrWhiteSpace(methodName))
+        {
+            if (!lastWasUnknown)
+            {
+                yield return "Unmanaged Code";
+                lastWasUnknown = true;
+            }
+
+            continue;
+        }
+
+        lastWasUnknown = false;
+        yield return methodName;
+    }
+}
+
 string? GetTopFrameName(TraceCallStack? stack)
 {
     if (stack == null)
@@ -2002,7 +2043,13 @@ IRenderable BuildContentionCallTree(
         }
     }
 
-    var rootLabel = FormatCallTreeLine(rootNode, rootTotal, useSelfTime: false, isRoot: true);
+    var rootLabel = FormatCallTreeLine(
+        rootNode,
+        rootTotal,
+        useSelfTime: false,
+        isRoot: true,
+        timeUnitLabel: "ms",
+        countSuffix: "x");
     var tree = new Tree(rootLabel)
     {
         Style = new Style(Color.Grey),
@@ -2026,7 +2073,14 @@ IRenderable BuildContentionCallTree(
                          maxWidth,
                          siblingCutoffPercent,
                          IsRuntimeNoise).Count == 0;
-        var childNode = tree.AddNode(FormatCallTreeLine(child, rootTotal, useSelfTime: false, isRoot: false, isLeaf));
+        var childNode = tree.AddNode(FormatCallTreeLine(
+            child,
+            rootTotal,
+            useSelfTime: false,
+            isRoot: false,
+            timeUnitLabel: "ms",
+            countSuffix: "x",
+            isLeaf: isLeaf));
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2038,7 +2092,9 @@ IRenderable BuildContentionCallTree(
                 2,
                 maxDepth,
                 maxWidth,
-                siblingCutoffPercent);
+                siblingCutoffPercent,
+                "ms",
+                "x");
         }
     }
 
@@ -2292,6 +2348,8 @@ IRenderable BuildCallTree(
     int maxWidth,
     string? rootMode,
     int siblingCutoffPercent,
+    string timeUnitLabel,
+    string countSuffix,
     bool showTimeline = false,
     int timelineWidth = 40)
 {
@@ -2341,7 +2399,21 @@ IRenderable BuildCallTree(
 
         // Collect all rows by walking the tree
         var rows = new List<(string TreeText, int VisibleLength, string TimelineBar)>();
-        CollectTimelineRows(rows, rootNode, rootTotal, useSelfTime, "", true, includeRuntime, 0, maxDepth, maxWidth, siblingCutoffPercent, timeline);
+        CollectTimelineRows(
+            rows,
+            rootNode,
+            rootTotal,
+            useSelfTime,
+            timeUnitLabel,
+            countSuffix,
+            "",
+            true,
+            includeRuntime,
+            0,
+            maxDepth,
+            maxWidth,
+            siblingCutoffPercent,
+            timeline);
 
         // Build combined output - each row is tree + padding + timeline on one line
         var outputLines = new List<IRenderable> { new Markup($"[bold yellow]{title}[/]") };
@@ -2355,7 +2427,16 @@ IRenderable BuildCallTree(
     }
 
     // No timeline - use regular tree
-    var rootLabel = FormatCallTreeLine(rootNode, rootTotal, useSelfTime, isRoot: true, isLeaf: false, null, depth: 0);
+    var rootLabel = FormatCallTreeLine(
+        rootNode,
+        rootTotal,
+        useSelfTime,
+        isRoot: true,
+        timeUnitLabel: timeUnitLabel,
+        countSuffix: countSuffix,
+        isLeaf: false,
+        timeline: null,
+        depth: 0);
     var tree = new Tree(rootLabel)
     {
         Style = new Style(Color.Grey),
@@ -2379,7 +2460,16 @@ IRenderable BuildCallTree(
                          maxWidth,
                          siblingCutoffPercent,
                          IsRuntimeNoise).Count == 0;
-        var childNode = tree.AddNode(FormatCallTreeLine(child, rootTotal, useSelfTime, isRoot: false, isLeaf, null, depth: 1));
+        var childNode = tree.AddNode(FormatCallTreeLine(
+            child,
+            rootTotal,
+            useSelfTime,
+            isRoot: false,
+            timeUnitLabel: timeUnitLabel,
+            countSuffix: countSuffix,
+            isLeaf: isLeaf,
+            timeline: null,
+            depth: 1));
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2392,6 +2482,8 @@ IRenderable BuildCallTree(
                 maxDepth,
                 maxWidth,
                 siblingCutoffPercent,
+                timeUnitLabel,
+                countSuffix,
                 null);
         }
     }
@@ -2406,6 +2498,8 @@ void CollectTimelineRows(
     CallTreeNode node,
     double totalTime,
     bool useSelfTime,
+    string timeUnitLabel,
+    string countSuffix,
     string prefix,
     bool isRoot,
     bool includeRuntime,
@@ -2417,7 +2511,15 @@ void CollectTimelineRows(
     string? continuationPrefix = null)
 {
     // Format this node
-    var (treeText, visibleLength) = FormatCallTreeLineSimple(node, totalTime, useSelfTime, isRoot, prefix, timeline.TextWidth);
+    var (treeText, visibleLength) = FormatCallTreeLineSimple(
+        node,
+        totalTime,
+        useSelfTime,
+        isRoot,
+        timeUnitLabel,
+        countSuffix,
+        prefix,
+        timeline.TextWidth);
     var timelineBar = RenderTimelineBar(node, timeline);
     rows.Add((treeText, visibleLength, timelineBar));
 
@@ -2452,6 +2554,8 @@ void CollectTimelineRows(
             child,
             totalTime,
             useSelfTime,
+            timeUnitLabel,
+            countSuffix,
             basePrefix + connector,  // This node's full prefix
             isRoot: false,
             includeRuntime,
@@ -2469,6 +2573,8 @@ void CollectTimelineRows(
     double totalTime,
     bool useSelfTime,
     bool isRoot,
+    string timeUnitLabel,
+    string countSuffix,
     string prefix,
     int maxWidth)
 {
@@ -2481,12 +2587,14 @@ void CollectTimelineRows(
     var calls = node.Calls;
 
     var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
-    var timeText = timeSpent.ToString("F2", CultureInfo.InvariantCulture);
+    var timeText = FormatCpuTime(timeSpent, timeUnitLabel);
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
+    var countText = callsText + countSuffix;
 
-    // Calculate visible length of prefix + stats: "prefix12.34 ms 56.7% 1,234x "
-    var statsLength = prefix.Length + timeText.Length + 4 + pctText.Length + 2 + callsText.Length + 2; // " ms" + "% " + "x "
+    // Calculate visible length of prefix + stats.
+    var statsText = $"{timeText} {timeUnitLabel} {pctText}% {countText} ";
+    var statsLength = prefix.Length + statsText.Length;
     var maxNameLength = maxWidth - statsLength - 1; // -1 for trailing space
 
     // Truncate name if needed
@@ -2508,7 +2616,7 @@ void CollectTimelineRows(
 
     var visibleLength = statsLength + truncatedName.Length;
 
-    return ($"[dim]{Markup.Escape(prefix)}[/][green]{timeText} ms[/] [cyan]{pctText}%[/] [blue]{callsText}x[/] {escapedName}", visibleLength);
+    return ($"[dim]{Markup.Escape(prefix)}[/][green]{timeText} {timeUnitLabel}[/] [cyan]{pctText}%[/] [blue]{countText}[/] {escapedName}", visibleLength);
 }
 
 void AddCallTreeChildren(
@@ -2521,6 +2629,8 @@ void AddCallTreeChildren(
     int maxDepth,
     int maxWidth,
     int siblingCutoffPercent,
+    string timeUnitLabel,
+    string countSuffix,
     TimelineContext? timeline = null)
 {
     if (depth > maxDepth)
@@ -2551,7 +2661,16 @@ void AddCallTreeChildren(
             : Array.Empty<CallTreeNode>();
         var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
 
-        var childNode = parent.AddNode(FormatCallTreeLine(child, totalTime, useSelfTime, isRoot: false, isLeaf, timeline, depth));
+        var childNode = parent.AddNode(FormatCallTreeLine(
+            child,
+            totalTime,
+            useSelfTime,
+            isRoot: false,
+            timeUnitLabel: timeUnitLabel,
+            countSuffix: countSuffix,
+            isLeaf: isLeaf,
+            timeline: timeline,
+            depth: depth));
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2564,6 +2683,8 @@ void AddCallTreeChildren(
                 maxDepth,
                 maxWidth,
                 siblingCutoffPercent,
+                timeUnitLabel,
+                countSuffix,
                 timeline);
         }
     }
@@ -2623,6 +2744,8 @@ string FormatCallTreeLine(
     double totalTime,
     bool useSelfTime,
     bool isRoot,
+    string timeUnitLabel,
+    string countSuffix,
     bool isLeaf = false,
     TimelineContext? timeline = null,
     int depth = 0)
@@ -2630,15 +2753,26 @@ string FormatCallTreeLine(
     var matchName = GetCallTreeMatchName(node);
     var displayName = GetCallTreeDisplayName(matchName);
 
+    var timeSpent = isRoot && useSelfTime
+        ? GetCallTreeTime(node, useSelfTime: false)
+        : GetCallTreeTime(node, useSelfTime);
+    var calls = node.Calls;
+
+    var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
+    var timeText = FormatCpuTime(timeSpent, timeUnitLabel);
+    var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
+    var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
+    var countText = callsText + countSuffix;
+
     // Calculate max name length based on actual depth (shallower = more space)
     int maxNameLen;
     if (timeline != null)
     {
         // Tree guides take ~4 chars per level (can be more with branches: "│  " + "└─ ")
         var treeGuideWidth = depth * 4;
-        // Stats prefix is ~28 chars for "12345.67 ms 100.0% 1,234x "
+        var statsText = $"{timeText} {timeUnitLabel} {pctText}% {countText} ";
         // Available for name = text width - tree guides - stats
-        maxNameLen = Math.Max(15, timeline.TextWidth - treeGuideWidth - 28);
+        maxNameLen = Math.Max(15, timeline.TextWidth - treeGuideWidth - statsText.Length);
     }
     else
     {
@@ -2650,18 +2784,9 @@ string FormatCallTreeLine(
         displayName = displayName[..(maxNameLen - 3)] + "...";
     }
 
-    var timeSpent = isRoot && useSelfTime
-        ? GetCallTreeTime(node, useSelfTime: false)
-        : GetCallTreeTime(node, useSelfTime);
-    var calls = node.Calls;
-
-    var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
-    var timeText = timeSpent.ToString("F2", CultureInfo.InvariantCulture);
-    var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
-    var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var nameText = FormatCallTreeName(displayName, matchName, isLeaf);
 
-    var baseLine = $"[green]{timeText} ms[/] [cyan]{pctText}%[/] [blue]{callsText}x[/] {nameText}";
+    var baseLine = $"[green]{timeText} {timeUnitLabel}[/] [cyan]{pctText}%[/] [blue]{countText}[/] {nameText}";
 
     // Add timeline bar if enabled
     if (timeline != null && node.HasTiming)
@@ -2831,44 +2956,9 @@ string FormatExceptionCallTreeLine(
     return $"[green]{countText}x[/] [cyan]{pctText}%[/] {nameText}";
 }
 
-CallTreeNode GetOrCreateCallTreeChild(
-    CallTreeNode parent,
-    int frameIdx,
-    IReadOnlyList<string> frames)
-{
-    if (!parent.Children.TryGetValue(frameIdx, out var child))
-    {
-        var name = frameIdx >= 0 && frameIdx < frames.Count ? frames[frameIdx] : "Unknown";
-        child = new CallTreeNode(frameIdx, name);
-        parent.Children[frameIdx] = child;
-    }
-
-    return child;
-}
-
 double GetCallTreeTime(CallTreeNode node, bool useSelfTime)
 {
     return useSelfTime ? node.Self : node.Total;
-}
-
-double SumCallTreeTotals(CallTreeNode node)
-{
-    var sum = 0d;
-    foreach (var child in node.Children.Values)
-    {
-        sum += child.Total;
-    }
-    return sum;
-}
-
-int SumCallTreeCalls(CallTreeNode node)
-{
-    var sum = 0;
-    foreach (var child in node.Children.Values)
-    {
-        sum += child.Calls;
-    }
-    return sum;
 }
 
 List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
@@ -3012,6 +3102,19 @@ string FormatBytes(long bytes)
     }
 
     return (bytes / (1024d * 1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " GB";
+}
+
+string FormatCpuTime(double value, string timeUnitLabel)
+{
+    if (string.Equals(timeUnitLabel, "samples", StringComparison.OrdinalIgnoreCase))
+    {
+        var rounded = Math.Round(value, 2);
+        var isWhole = Math.Abs(rounded - Math.Round(rounded)) < 0.0001;
+        var format = isWhole ? "N0" : "N2";
+        return rounded.ToString(format, CultureInfo.InvariantCulture);
+    }
+
+    return value.ToString("F2", CultureInfo.InvariantCulture);
 }
 
 bool IsUnmanagedFrame(string name)
