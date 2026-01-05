@@ -12,7 +12,17 @@ internal static class NameFormatter
             return rawName;
         }
 
+        if (IsUnmanagedCode(rawName))
+        {
+            return "Unmanaged Code";
+        }
+
         var name = StripParameterList(rawName);
+        if (IsUnmanagedCode(name))
+        {
+            return "Unmanaged Code";
+        }
+
         if (name.Contains('!'))
         {
             name = StripParameterList(name.Split('!')[^1]);
@@ -75,6 +85,17 @@ internal static class NameFormatter
         normalized = normalized.Replace('+', '.');
 
         return normalized;
+    }
+
+    private static bool IsUnmanagedCode(string name)
+    {
+        var trimmed = name?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        return trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string StripParameterList(string name)

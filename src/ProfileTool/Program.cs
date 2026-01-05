@@ -439,18 +439,23 @@ void PrintCpuResults(
 
     foreach (var entry in filteredList.Take(15))
     {
-        var funcName = NameFormatter.FormatMethodDisplayName(entry.Name);
+        var funcName = FormatFunctionDisplayName(entry.Name);
         if (funcName.Length > 70) funcName = funcName[..67] + "...";
 
         var timeMs = entry.TimeMs;
         var calls = entry.Calls;
         var timeMsText = timeMs.ToString("F2", CultureInfo.InvariantCulture);
         var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
+        var funcText = Markup.Escape(funcName);
+        if (IsUnmanagedFrame(funcName))
+        {
+            funcText = $"[plum1]{funcText}[/]";
+        }
 
         table.AddRow(
             $"[green]{timeMsText}[/]",
             $"[blue]{callsText}[/]",
-            Markup.Escape(funcName)
+            funcText
         );
     }
 
@@ -1746,14 +1751,20 @@ void PrintExceptionResults(
 
             foreach (var entry in catchList.Take(15))
             {
-                var funcName = NameFormatter.FormatMethodDisplayName(entry.Name);
+                var funcName = FormatFunctionDisplayName(entry.Name);
                 if (funcName.Length > 70)
                 {
                     funcName = funcName[..67] + "...";
                 }
 
                 var countText = entry.Count.ToString("N0", CultureInfo.InvariantCulture);
-                catchTable.AddRow($"[blue]{countText}[/]", Markup.Escape(funcName));
+                var funcText = Markup.Escape(funcName);
+                if (IsUnmanagedFrame(funcName))
+                {
+                    funcText = $"[plum1]{funcText}[/]";
+                }
+
+                catchTable.AddRow($"[blue]{countText}[/]", funcText);
             }
 
             AnsiConsole.Write(catchTable);
@@ -1818,7 +1829,7 @@ void PrintContentionResults(
 
     foreach (var entry in filteredList.Take(15))
     {
-        var funcName = NameFormatter.FormatMethodDisplayName(entry.Name);
+        var funcName = FormatFunctionDisplayName(entry.Name);
         if (funcName.Length > 70)
         {
             funcName = funcName[..67] + "...";
@@ -1826,10 +1837,15 @@ void PrintContentionResults(
 
         var waitText = entry.TimeMs.ToString("F2", CultureInfo.InvariantCulture);
         var countText = entry.Calls.ToString("N0", CultureInfo.InvariantCulture);
+        var funcText = Markup.Escape(funcName);
+        if (IsUnmanagedFrame(funcName))
+        {
+            funcText = $"[plum1]{funcText}[/]";
+        }
         table.AddRow(
             $"[green]{waitText}[/]",
             $"[blue]{countText}[/]",
-            Markup.Escape(funcName));
+            funcText);
     }
 
     AnsiConsole.Write(table);
@@ -2124,7 +2140,7 @@ IRenderable BuildAllocationCallTree(
     var children = GetVisibleAllocationChildren(root, includeRuntime, maxWidth, siblingCutoffPercent);
     foreach (var child in children)
     {
-        var isSpecialLeaf = ShouldStopAtLeaf(NameFormatter.FormatMethodDisplayName(child.Name));
+        var isSpecialLeaf = ShouldStopAtLeaf(FormatFunctionDisplayName(child.Name));
         var childChildren = !isSpecialLeaf
             ? GetVisibleAllocationChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
             : Array.Empty<AllocationCallTreeNode>();
@@ -2167,7 +2183,7 @@ void AddAllocationCallTreeChildren(
     foreach (var child in children)
     {
         var nextDepth = depth + 1;
-        var isSpecialLeaf = ShouldStopAtLeaf(NameFormatter.FormatMethodDisplayName(child.Name));
+        var isSpecialLeaf = ShouldStopAtLeaf(FormatFunctionDisplayName(child.Name));
         var childChildren = !isSpecialLeaf && nextDepth <= maxDepth
             ? GetVisibleAllocationChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
             : Array.Empty<AllocationCallTreeNode>();
@@ -2254,7 +2270,7 @@ string FormatAllocationCallTreeLine(
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
     var countText = count.ToString("N0", CultureInfo.InvariantCulture);
 
-    var displayName = isRoot ? NameFormatter.FormatTypeDisplayName(node.Name) : NameFormatter.FormatMethodDisplayName(node.Name);
+    var displayName = isRoot ? NameFormatter.FormatTypeDisplayName(node.Name) : FormatFunctionDisplayName(node.Name);
     if (displayName.Length > 80)
     {
         displayName = displayName[..77] + "...";
@@ -2485,6 +2501,11 @@ void CollectTimelineRows(
     }
 
     var escapedName = Markup.Escape(truncatedName);
+    if (ShouldStopAtLeaf(matchName))
+    {
+        escapedName = $"[plum1]{escapedName}[/]";
+    }
+
     var visibleLength = statsLength + truncatedName.Length;
 
     return ($"[dim]{Markup.Escape(prefix)}[/][green]{timeText} ms[/] [cyan]{pctText}%[/] [blue]{callsText}x[/] {escapedName}", visibleLength);
@@ -2864,7 +2885,7 @@ List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
     {
         if (current.FrameIdx >= 0)
         {
-            var displayName = NameFormatter.FormatMethodDisplayName(current.Name);
+            var displayName = FormatFunctionDisplayName(current.Name);
             if (displayName.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase) ||
                 current.Name.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase))
             {
@@ -2993,6 +3014,37 @@ string FormatBytes(long bytes)
     return (bytes / (1024d * 1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " GB";
 }
 
+bool IsUnmanagedFrame(string name)
+{
+    var trimmed = name?.Trim() ?? string.Empty;
+    if (trimmed.Length == 0)
+    {
+        return false;
+    }
+
+    if (trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.OrdinalIgnoreCase) ||
+        trimmed.Contains("Unmanaged Code", StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    foreach (var ch in trimmed)
+    {
+        if (char.IsLetter(ch))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+string FormatFunctionDisplayName(string rawName)
+{
+    var formatted = NameFormatter.FormatMethodDisplayName(rawName);
+    return GetCallTreeDisplayName(formatted);
+}
+
 string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
 {
     var escaped = Markup.Escape(displayName);
@@ -3002,27 +3054,7 @@ string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
     }
 
     const string leafHighlightColor = "plum1";
-    if (matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
-        matchName.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal))
-    {
-        return $"[{leafHighlightColor}]{escaped}[/]";
-    }
-
-    if (matchName.Contains("Array.Copy", StringComparison.Ordinal) ||
-        matchName.Contains("Dictionary<__Canon,__Canon>.Resize", StringComparison.Ordinal) ||
-        matchName.Contains("Buffer.BulkMoveWithWriteBarrier", StringComparison.Ordinal) ||
-        matchName.Contains("SpanHelpers.SequenceEqual", StringComparison.Ordinal) ||
-        matchName.Contains("HashSet<", StringComparison.Ordinal) ||
-        matchName.Contains("Enumerable+ArrayWhereSelectIterator<", StringComparison.Ordinal) ||
-        matchName.Contains("ImmutableDictionary<", StringComparison.Ordinal) ||
-        matchName.Contains("SegmentedArrayBuilder<__Canon>.ToArray", StringComparison.Ordinal) ||
-        matchName.Contains("__Canon", StringComparison.Ordinal))
-    {
-        return $"[{leafHighlightColor}]{escaped}[/]";
-    }
-
-    if (matchName.Contains("List<", StringComparison.Ordinal) &&
-        matchName.EndsWith(".ToArray", StringComparison.Ordinal))
+    if (ShouldStopAtLeaf(matchName))
     {
         return $"[{leafHighlightColor}]{escaped}[/]";
     }
@@ -3037,7 +3069,7 @@ string GetCallTreeMatchName(CallTreeNode node)
 
 string GetCallTreeDisplayName(string matchName)
 {
-    if (matchName.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal))
+    if (IsUnmanagedFrame(matchName))
     {
         return "Unmanaged Code";
     }
@@ -3047,8 +3079,8 @@ string GetCallTreeDisplayName(string matchName)
 
 bool ShouldStopAtLeaf(string matchName)
 {
-    return matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
-           matchName.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal) ||
+    return IsUnmanagedFrame(matchName) ||
+           matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
            matchName.Contains("Array.Copy", StringComparison.Ordinal) ||
            matchName.Contains("Dictionary<__Canon,__Canon>.Resize", StringComparison.Ordinal) ||
            matchName.Contains("Buffer.BulkMoveWithWriteBarrier", StringComparison.Ordinal) ||
@@ -3070,7 +3102,7 @@ bool MatchesFunctionFilter(string name, string? filter)
     }
 
     return name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-           NameFormatter.FormatMethodDisplayName(name).Contains(filter, StringComparison.OrdinalIgnoreCase);
+           FormatFunctionDisplayName(name).Contains(filter, StringComparison.OrdinalIgnoreCase);
 }
 
 IReadOnlyList<ExceptionTypeSample> FilterExceptionTypes(
@@ -3112,8 +3144,8 @@ string? SelectExceptionType(IReadOnlyList<ExceptionTypeSample> types, string? fi
 bool IsRuntimeNoise(string name)
 {
     var trimmed = name.TrimStart();
-    var formatted = NameFormatter.FormatMethodDisplayName(trimmed);
-    return trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal) ||
+    var formatted = FormatFunctionDisplayName(trimmed);
+    return IsUnmanagedFrame(trimmed) ||
            trimmed.Contains("(Non-Activities)", StringComparison.Ordinal) ||
            trimmed.Contains("Thread", StringComparison.Ordinal) ||
            trimmed.Contains("Threads", StringComparison.Ordinal) ||

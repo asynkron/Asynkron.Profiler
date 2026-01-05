@@ -10,6 +10,8 @@ public sealed class NameFormatterTests
     [InlineData("PromiseConstructor.<AttachStatics>b__5_0", "PromiseConstructor.AttachStatics lambda")]
     [InlineData("Asynkron.JsEngine.Ast.TypedAstEvaluator+TypedFunction.InvokeWithContext2(System.Int32)",
         "TypedAstEvaluator.TypedFunction.InvokeWithContext2")]
+    [InlineData("UNMANAGED_CODE_TIME", "Unmanaged Code")]
+    [InlineData("UNMANAGED_CODE_TIME (Native Frames)", "Unmanaged Code")]
     [InlineData("0)", "Unmanaged Code")]
     [InlineData("0[]&,int32)", "Unmanaged Code")]
     [InlineData("0&,unsigned int)", "Unmanaged Code")]
