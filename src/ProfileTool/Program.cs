@@ -14,13 +14,108 @@ using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
-const string LeafHighlightColor = "#9a9a9a";
 const int AllocationTypeLimit = 3;
+var theme = Theme.Current;
+var treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
 
-void PrintSection(string text)
+void PrintSection(string text, string? color = null)
 {
     Console.WriteLine();
-    Console.WriteLine(text);
+    if (string.IsNullOrWhiteSpace(color))
+    {
+        Console.WriteLine(text);
+        return;
+    }
+
+    AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(text)}[/]");
+}
+
+Color ParseColor(string hex)
+{
+    if (string.IsNullOrWhiteSpace(hex))
+    {
+        return Color.Default;
+    }
+
+    var value = Convert.ToInt32(hex.TrimStart('#'), 16);
+    return new Color(
+        (byte)((value >> 16) & 0xFF),
+        (byte)((value >> 8) & 0xFF),
+        (byte)(value & 0xFF));
+}
+
+bool TryApplyTheme(string? themeName)
+{
+    if (!Theme.TryResolve(themeName, out var selectedTheme))
+    {
+        var name = themeName ?? string.Empty;
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unknown theme '{Markup.Escape(name)}'[/]");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Available themes:[/] {Theme.AvailableThemes}");
+        return false;
+    }
+
+    Theme.Current = selectedTheme;
+    theme = selectedTheme;
+    treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
+    return true;
+}
+
+Table BuildTable(
+    IReadOnlyList<TableColumnSpec> columns,
+    string? title = null,
+    bool hideHeaders = false,
+    string? headerColor = null)
+{
+    var resolvedHeaderColor = string.IsNullOrWhiteSpace(headerColor)
+        ? theme.AccentColor
+        : headerColor;
+    var table = new Table()
+        .Border(TableBorder.None);
+
+    if (!string.IsNullOrWhiteSpace(title))
+    {
+        table.Title(title);
+    }
+
+    if (hideHeaders)
+    {
+        table.HideHeaders();
+    }
+
+    foreach (var column in columns)
+    {
+        var headerText = column.Header;
+        if (!string.IsNullOrEmpty(headerText))
+        {
+            headerText = $"[{resolvedHeaderColor}]{headerText}[/]";
+        }
+
+        var tableColumn = new TableColumn(headerText);
+        if (column.RightAligned)
+        {
+            tableColumn.RightAligned();
+        }
+
+        table.AddColumn(tableColumn);
+    }
+
+    return table;
+}
+
+void WriteTable(
+    IReadOnlyList<TableColumnSpec> columns,
+    IEnumerable<IReadOnlyList<string>> rows,
+    string? title = null,
+    bool hideHeaders = false,
+    string? headerColor = null)
+{
+    var table = BuildTable(columns, title, hideHeaders, headerColor);
+    foreach (var row in rows)
+    {
+        table.AddRow(row.ToArray());
+    }
+
+    AnsiConsole.Write(table);
 }
 
 IReadOnlyList<string> GetUsageExampleLines()
@@ -64,7 +159,11 @@ IReadOnlyList<string> GetUsageExampleLines()
         "  asynkron-profiler --input ./profile-output/app.nettrace --exception",
         "",
         "General:",
-        "  asynkron-profiler --help"
+        "  asynkron-profiler --help",
+        "",
+        "Themes:",
+        "  asynkron-profiler --theme onedark --cpu -- ./bin/Release/<tfm>/MyApp",
+        $"  Available: {Theme.AvailableThemes}"
     };
 }
 
@@ -211,8 +310,8 @@ bool EnsureToolAvailable(string toolName, string installHint)
     if (!success)
     {
         var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
-        AnsiConsole.MarkupLine($"[red]{toolName} unavailable:[/] {Markup.Escape(detail)}");
-        AnsiConsole.MarkupLine($"[yellow]Install:[/] {Markup.Escape(installHint)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{toolName} unavailable:[/] {Markup.Escape(detail)}");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Install:[/] {Markup.Escape(installHint)}");
         toolAvailability[toolName] = false;
         return false;
     }
@@ -233,7 +332,7 @@ string? CollectCpuMemoryTrace(string[] command, string label)
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting CPU + allocation trace for [yellow]{label}[/]...", ctx =>
+        .Start($"Collecting CPU + allocation trace for [{theme.AccentColor}]{label}[/]...", ctx =>
         {
             ctx.Status("Collecting trace data...");
             var collectArgs = new List<string>
@@ -252,7 +351,7 @@ string? CollectCpuMemoryTrace(string[] command, string label)
 
             if (!success || !File.Exists(traceFile))
             {
-                AnsiConsole.MarkupLine($"[red]Trace collection failed:[/] {Markup.Escape(stderr)}");
+                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Trace collection failed:[/] {Markup.Escape(stderr)}");
                 return null;
             }
 
@@ -272,7 +371,7 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
-        .Start($"Running CPU profile on [yellow]{label}[/]...", ctx =>
+        .Start($"Running CPU profile on [{theme.AccentColor}]{label}[/]...", ctx =>
         {
             ctx.Status("Collecting trace data...");
             var collectArgs = new List<string>
@@ -289,7 +388,7 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
 
             if (!success || !File.Exists(traceFile))
             {
-                AnsiConsole.MarkupLine($"[red]Trace collection failed:[/] {Markup.Escape(stderr)}");
+                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Trace collection failed:[/] {Markup.Escape(stderr)}");
                 return null;
             }
 
@@ -466,7 +565,7 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
 
         if (totalSamples == 0)
         {
-            AnsiConsole.MarkupLine("[yellow]No CPU samples found in trace.[/]");
+            AnsiConsole.MarkupLine($"[{theme.AccentColor}]No CPU samples found in trace.[/]");
             return null;
         }
 
@@ -497,7 +596,7 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
     }
     catch (Exception ex)
     {
-        AnsiConsole.MarkupLine($"[yellow]CPU trace parse failed:[/] {Markup.Escape(ex.Message)}");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]CPU trace parse failed:[/] {Markup.Escape(ex.Message)}");
         return null;
     }
 }
@@ -519,7 +618,7 @@ void PrintCpuResults(
 {
     if (results == null)
     {
-        AnsiConsole.MarkupLine("[red]No results to display[/]");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No results to display[/]");
         return;
     }
 
@@ -538,7 +637,6 @@ void PrintCpuResults(
     var allocationTypeLimit = results.CallTreeRoot.AllocationBytes > 0 ? AllocationTypeLimit : 0;
 
     // Top functions overall - using Spectre table
-    AnsiConsole.WriteLine();
     var filteredAll = allFunctions.Where(entry => MatchesFunctionFilter(entry.Name, functionFilter));
     if (!includeRuntime)
     {
@@ -552,12 +650,8 @@ void PrintCpuResults(
     var timeColumnLabel = string.Equals(timeUnitLabel, "samples", StringComparison.OrdinalIgnoreCase)
         ? "Samples"
         : $"Time ({timeUnitLabel})";
-    var table = new Table()
-        .Border(TableBorder.None)
-        .Title($"[bold]{topTitle}[/]")
-        .AddColumn(new TableColumn($"[yellow]{timeColumnLabel}[/]").RightAligned())
-        .AddColumn(new TableColumn($"[yellow]{countLabel}[/]").RightAligned())
-        .AddColumn(new TableColumn("[yellow]Function[/]"));
+    var rows = new List<IReadOnlyList<string>>();
+    PrintSection(topTitle, theme.CpuCountColor);
 
     foreach (var entry in filteredList.Take(15))
     {
@@ -571,17 +665,25 @@ void PrintCpuResults(
         var funcText = Markup.Escape(funcName);
         if (IsUnmanagedFrame(funcName))
         {
-            funcText = $"[plum1]{funcText}[/]";
+            funcText = $"[{theme.RuntimeTypeColor}]{funcText}[/]";
         }
 
-        table.AddRow(
-            $"[green]{timeMsText}[/]",
-            $"[blue]{callsText}[/]",
-            funcText
-        );
+        rows.Add(new[]
+        {
+            funcText,
+            $"[{theme.CpuCountColor}]{callsText}[/]",
+            $"[{theme.CpuValueColor}]{timeMsText}[/]"
+        });
     }
 
-    AnsiConsole.Write(table);
+    WriteTable(
+        new[]
+        {
+            new TableColumnSpec("Function"),
+            new TableColumnSpec(countLabel, RightAligned: true),
+            new TableColumnSpec(timeColumnLabel, RightAligned: true)
+        },
+        rows);
     var filteredOut = allFunctions.Count - filteredList.Count;
     if (filteredOut > 0)
     {
@@ -596,25 +698,39 @@ void PrintCpuResults(
     }
 
     // Summary panel
-    AnsiConsole.WriteLine();
-
-    var summaryTable = new Table()
-        .Border(TableBorder.None)
-        .Title("[bold yellow]Summary[/]")
-        .HideHeaders()
-        .AddColumn("")
-        .AddColumn("");
-
     var totalTimeText = FormatCpuTime(totalTime, timeUnitLabel);
     var hotCountText = allFunctions.Count.ToString(CultureInfo.InvariantCulture);
     var totalLabel = string.Equals(timeUnitLabel, "samples", StringComparison.OrdinalIgnoreCase)
         ? "Total Samples"
         : "Total Time";
-    summaryTable.AddRow($"[bold]{totalLabel}[/]", $"[green]{totalTimeText} {timeUnitLabel}[/]");
-    summaryTable.AddRow("[bold]Input Unit[/]", $"[green]{timeUnitLabel}[/]");
-    summaryTable.AddRow("[bold]Hot Functions[/]", $"[blue]{hotCountText}[/] functions profiled");
+    var summaryRows = new List<IReadOnlyList<string>>
+    {
+        new[]
+        {
+            $"[bold]{totalLabel}[/]",
+            $"[{theme.CpuValueColor}]{totalTimeText} {timeUnitLabel}[/]"
+        },
+        new[]
+        {
+            "[bold]Input Unit[/]",
+            $"[{theme.CpuValueColor}]{timeUnitLabel}[/]"
+        },
+        new[]
+        {
+            "[bold]Hot Functions[/]",
+            $"[{theme.CpuCountColor}]{hotCountText}[/] functions profiled"
+        }
+    };
 
-    AnsiConsole.Write(summaryTable);
+    PrintSection("Summary");
+    WriteTable(
+        new[]
+        {
+            new TableColumnSpec(string.Empty),
+            new TableColumnSpec(string.Empty)
+        },
+        summaryRows,
+        hideHeaders: true);
 
     AnsiConsole.Write(BuildCallTree(
         results,
@@ -652,7 +768,7 @@ CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
 {
     if (!File.Exists(inputPath))
     {
-        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
@@ -664,7 +780,7 @@ CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
 
     if (extension != ".nettrace" && extension != ".etlx")
     {
-        AnsiConsole.MarkupLine($"[red]Unsupported CPU input:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported CPU input:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
@@ -683,7 +799,7 @@ MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
 
     var callTree = AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting allocation trace for [yellow]{label}[/]...", ctx =>
+        .Start($"Collecting allocation trace for [{theme.AccentColor}]{label}[/]...", ctx =>
         {
             ctx.Status("Collecting trace data...");
             var collectArgs = new List<string>
@@ -700,7 +816,7 @@ MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
 
             if (!success || !File.Exists(traceFile))
             {
-                AnsiConsole.MarkupLine($"[red]Allocation trace failed:[/] {Markup.Escape(stderr)}");
+                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Allocation trace failed:[/] {Markup.Escape(stderr)}");
                 return null;
             }
 
@@ -745,14 +861,14 @@ MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
 {
     if (!File.Exists(inputPath))
     {
-        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
     if (extension != ".nettrace" && extension != ".etlx")
     {
-        AnsiConsole.MarkupLine($"[red]Unsupported memory input:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported memory input:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
@@ -805,7 +921,7 @@ ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting exception trace for [yellow]{label}[/]...", ctx =>
+        .Start($"Collecting exception trace for [{theme.AccentColor}]{label}[/]...", ctx =>
         {
             ctx.Status("Collecting trace data...");
             var collectArgs = new List<string>
@@ -822,7 +938,7 @@ ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
 
             if (!success || !File.Exists(traceFile))
             {
-                AnsiConsole.MarkupLine($"[red]Exception trace failed:[/] {Markup.Escape(stderr)}");
+                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Exception trace failed:[/] {Markup.Escape(stderr)}");
                 return null;
             }
 
@@ -835,14 +951,14 @@ ExceptionProfileResult? ExceptionProfileFromInput(string inputPath, string label
 {
     if (!File.Exists(inputPath))
     {
-        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
     if (extension != ".nettrace" && extension != ".etlx")
     {
-        AnsiConsole.MarkupLine($"[red]Unsupported exception input:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported exception input:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
@@ -1104,7 +1220,7 @@ ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
     }
     catch (Exception ex)
     {
-        AnsiConsole.MarkupLine($"[yellow]Exception trace parse failed:[/] {Markup.Escape(ex.Message)}");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Exception trace parse failed:[/] {Markup.Escape(ex.Message)}");
         return null;
     }
 }
@@ -1124,7 +1240,7 @@ ContentionProfileResult? ContentionProfileCommand(string[] command, string label
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting lock contention trace for [yellow]{label}[/]...", ctx =>
+        .Start($"Collecting lock contention trace for [{theme.AccentColor}]{label}[/]...", ctx =>
         {
             ctx.Status("Collecting trace data...");
             var collectArgs = new List<string>
@@ -1141,7 +1257,7 @@ ContentionProfileResult? ContentionProfileCommand(string[] command, string label
 
             if (!success || !File.Exists(traceFile))
             {
-                AnsiConsole.MarkupLine($"[red]Contention trace failed:[/] {Markup.Escape(stderr)}");
+                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Contention trace failed:[/] {Markup.Escape(stderr)}");
                 return null;
             }
 
@@ -1154,14 +1270,14 @@ ContentionProfileResult? ContentionProfileFromInput(string inputPath, string lab
 {
     if (!File.Exists(inputPath))
     {
-        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
     if (extension != ".nettrace" && extension != ".etlx")
     {
-        AnsiConsole.MarkupLine($"[red]Unsupported contention input:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported contention input:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
@@ -1350,7 +1466,7 @@ ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
     }
     catch (Exception ex)
     {
-        AnsiConsole.MarkupLine($"[yellow]Contention trace parse failed:[/] {Markup.Escape(ex.Message)}");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Contention trace parse failed:[/] {Markup.Escape(ex.Message)}");
         return null;
     }
 }
@@ -1655,7 +1771,7 @@ AllocationCallTreeResult? AnalyzeAllocationTrace(string traceFile)
     }
     catch (Exception ex)
     {
-        AnsiConsole.MarkupLine($"[yellow]Allocation trace parse failed:[/] {Markup.Escape(ex.Message)}");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Allocation trace parse failed:[/] {Markup.Escape(ex.Message)}");
         return null;
     }
 }
@@ -1686,7 +1802,7 @@ void PrintMemoryResults(
 {
     if (results == null)
     {
-        AnsiConsole.MarkupLine("[red]No results to display[/]");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No results to display[/]");
         return;
     }
 
@@ -1696,19 +1812,13 @@ void PrintMemoryResults(
         AnsiConsole.MarkupLine($"[dim]{description}[/]");
     }
 
-    var table = new Table()
-        .Border(TableBorder.None)
-        .AddColumn(new TableColumn("[yellow]Metric[/]"))
-        .AddColumn(new TableColumn("[yellow]Value[/]"));
-
-    var hasRows = false;
+    var rows = new List<IReadOnlyList<string>>();
 
     void AddRow(string label, string? value)
     {
         if (!string.IsNullOrWhiteSpace(value))
         {
-            table.AddRow(label, Markup.Escape(value));
-            hasRows = true;
+            rows.Add(new[] { label, Markup.Escape(value) });
         }
     }
 
@@ -1725,19 +1835,26 @@ void PrintMemoryResults(
     AddRow("Heap before", results.HeapBefore);
     AddRow("Heap after", results.HeapAfter);
 
+    var hasRows = rows.Count > 0;
     if (hasRows)
     {
-        AnsiConsole.Write(table);
+        WriteTable(
+            new[]
+            {
+                new TableColumnSpec("Metric"),
+                new TableColumnSpec("Value")
+            },
+            rows);
     }
 
     if (!string.IsNullOrWhiteSpace(results.AllocationByTypeRaw))
     {
-        PrintSection("Allocation By Type (Sampled)");
+        PrintSection("Allocation By Type (Sampled)", theme.MemoryCountColor);
         AnsiConsole.WriteLine(results.AllocationByTypeRaw);
     }
     else if (results.AllocationEntries.Count > 0)
     {
-        PrintSection("Allocation By Type (Sampled)");
+        PrintSection("Allocation By Type (Sampled)", theme.MemoryCountColor);
         PrintAllocationTable(results.AllocationEntries, results.AllocationTotal);
     }
     else if (!hasRows && !string.IsNullOrWhiteSpace(results.RawOutput))
@@ -1773,7 +1890,7 @@ void PrintExceptionResults(
 {
     if (results == null)
     {
-        AnsiConsole.MarkupLine("[red]No results to display[/]");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No results to display[/]");
         return;
     }
 
@@ -1796,7 +1913,7 @@ void PrintExceptionResults(
     if (hasTypeFilter && filteredExceptionTypes.Count == 0)
     {
         AnsiConsole.MarkupLine(
-            $"[yellow]No exception types matched '{Markup.Escape(exceptionTypeFilter!)}'. Showing full results.[/]");
+            $"[{theme.AccentColor}]No exception types matched '{Markup.Escape(exceptionTypeFilter!)}'. Showing full results.[/]");
         filteredExceptionTypes = results.ExceptionTypes;
         selectedType = null;
         selectedDetails = null;
@@ -1808,16 +1925,12 @@ void PrintExceptionResults(
 
     if (filteredExceptionTypes.Count == 0)
     {
-        AnsiConsole.MarkupLine("[yellow]No exception events captured.[/]");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]No exception events captured.[/]");
     }
     else
     {
-        AnsiConsole.WriteLine();
-        var table = new Table()
-            .Border(TableBorder.None)
-            .Title("[bold]Top Exceptions (Thrown)[/]")
-            .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
-            .AddColumn(new TableColumn("[yellow]Exception[/]"));
+        PrintSection("Top Exceptions (Thrown)");
+        var rows = new List<IReadOnlyList<string>>();
 
         foreach (var entry in filteredExceptionTypes.Take(15))
         {
@@ -1828,31 +1941,52 @@ void PrintExceptionResults(
             }
 
             var countText = entry.Count.ToString("N0", CultureInfo.InvariantCulture);
-            table.AddRow($"[blue]{countText}[/]", Markup.Escape(typeName));
+            rows.Add(new[]
+            {
+                $"[{theme.CpuCountColor}]{countText}[/]",
+                Markup.Escape(typeName)
+            });
         }
 
-        AnsiConsole.Write(table);
+        WriteTable(
+            new[]
+            {
+                new TableColumnSpec("Count", RightAligned: true),
+                new TableColumnSpec("Exception")
+            },
+            rows);
     }
 
     var summaryThrown = selectedDetails?.Thrown ?? results.TotalThrown;
     var summaryCaught = selectedDetails?.Caught ?? results.TotalCaught;
-    var summaryTable = new Table()
-        .Border(TableBorder.None)
-        .Title("[bold yellow]Summary[/]")
-        .HideHeaders()
-        .AddColumn("")
-        .AddColumn("");
-
     var thrownText = summaryThrown.ToString("N0", CultureInfo.InvariantCulture);
-    summaryTable.AddRow("[bold]Thrown[/]", $"[green]{thrownText}[/]");
+    var summaryRows = new List<IReadOnlyList<string>>
+    {
+        new[]
+        {
+            "[bold]Thrown[/]",
+            $"[{theme.CpuValueColor}]{thrownText}[/]"
+        }
+    };
     if (summaryCaught > 0)
     {
         var caughtText = summaryCaught.ToString("N0", CultureInfo.InvariantCulture);
-        summaryTable.AddRow("[bold]Caught[/]", $"[blue]{caughtText}[/]");
+        summaryRows.Add(new[]
+        {
+            "[bold]Caught[/]",
+            $"[{theme.CpuCountColor}]{caughtText}[/]"
+        });
     }
 
-    AnsiConsole.WriteLine();
-    AnsiConsole.Write(summaryTable);
+    PrintSection("Summary");
+    WriteTable(
+        new[]
+        {
+            new TableColumnSpec(string.Empty),
+            new TableColumnSpec(string.Empty)
+        },
+        summaryRows,
+        hideHeaders: true);
 
     if (summaryThrown > 0)
     {
@@ -1882,12 +2016,8 @@ void PrintExceptionResults(
         var catchList = filteredCatchSites.ToList();
         if (catchList.Count > 0)
         {
-            AnsiConsole.WriteLine();
-            var catchTable = new Table()
-                .Border(TableBorder.None)
-                .Title("[bold]Top Catch Sites[/]")
-                .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
-                .AddColumn(new TableColumn("[yellow]Function[/]"));
+            PrintSection("Top Catch Sites");
+            var catchRows = new List<IReadOnlyList<string>>();
 
             foreach (var entry in catchList.Take(15))
             {
@@ -1901,13 +2031,23 @@ void PrintExceptionResults(
                 var funcText = Markup.Escape(funcName);
                 if (IsUnmanagedFrame(funcName))
                 {
-                    funcText = $"[plum1]{funcText}[/]";
+                    funcText = $"[{theme.RuntimeTypeColor}]{funcText}[/]";
                 }
 
-                catchTable.AddRow($"[blue]{countText}[/]", funcText);
+                catchRows.Add(new[]
+                {
+                    $"[{theme.CpuCountColor}]{countText}[/]",
+                    funcText
+                });
             }
 
-            AnsiConsole.Write(catchTable);
+            WriteTable(
+                new[]
+                {
+                    new TableColumnSpec("Count", RightAligned: true),
+                    new TableColumnSpec("Function")
+                },
+                catchRows);
         }
 
         var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
@@ -1939,7 +2079,7 @@ void PrintContentionResults(
 {
     if (results == null)
     {
-        AnsiConsole.MarkupLine("[red]No results to display[/]");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No results to display[/]");
         return;
     }
 
@@ -1956,16 +2096,11 @@ void PrintContentionResults(
     }
     var filteredList = filteredAll.ToList();
 
-    AnsiConsole.WriteLine();
     var topTitle = includeRuntime && string.IsNullOrWhiteSpace(functionFilter)
         ? "Top Contended Functions (All)"
         : "Top Contended Functions (Filtered)";
-    var table = new Table()
-        .Border(TableBorder.None)
-        .Title($"[bold]{topTitle}[/]")
-        .AddColumn(new TableColumn("[yellow]Wait (ms)[/]").RightAligned())
-        .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
-        .AddColumn(new TableColumn("[yellow]Function[/]"));
+    var rows = new List<IReadOnlyList<string>>();
+    PrintSection(topTitle);
 
     foreach (var entry in filteredList.Take(15))
     {
@@ -1980,15 +2115,24 @@ void PrintContentionResults(
         var funcText = Markup.Escape(funcName);
         if (IsUnmanagedFrame(funcName))
         {
-            funcText = $"[plum1]{funcText}[/]";
+            funcText = $"[{theme.RuntimeTypeColor}]{funcText}[/]";
         }
-        table.AddRow(
-            $"[green]{waitText}[/]",
-            $"[blue]{countText}[/]",
-            funcText);
+        rows.Add(new[]
+        {
+            $"[{theme.CpuValueColor}]{waitText}[/]",
+            $"[{theme.CpuCountColor}]{countText}[/]",
+            funcText
+        });
     }
 
-    AnsiConsole.Write(table);
+    WriteTable(
+        new[]
+        {
+            new TableColumnSpec("Wait (ms)", RightAligned: true),
+            new TableColumnSpec("Count", RightAligned: true),
+            new TableColumnSpec("Function")
+        },
+        rows);
     var filteredOut = results.TopFunctions.Count - filteredList.Count;
     if (filteredOut > 0)
     {
@@ -2002,19 +2146,31 @@ void PrintContentionResults(
             $"[dim]Filter: {Markup.Escape(functionFilter)} (use --filter to change).[/]");
     }
 
-    AnsiConsole.WriteLine();
-    var summaryTable = new Table()
-        .Border(TableBorder.None)
-        .Title("[bold yellow]Summary[/]")
-        .HideHeaders()
-        .AddColumn("")
-        .AddColumn("");
-
     var totalWaitText = results.TotalWaitMs.ToString("F2", CultureInfo.InvariantCulture);
     var totalCountText = results.TotalCount.ToString("N0", CultureInfo.InvariantCulture);
-    summaryTable.AddRow("[bold]Total Wait[/]", $"[green]{totalWaitText} ms[/]");
-    summaryTable.AddRow("[bold]Total Contentions[/]", $"[blue]{totalCountText}[/]");
-    AnsiConsole.Write(summaryTable);
+    var summaryRows = new List<IReadOnlyList<string>>
+    {
+        new[]
+        {
+            "[bold]Total Wait[/]",
+            $"[{theme.CpuValueColor}]{totalWaitText} ms[/]"
+        },
+        new[]
+        {
+            "[bold]Total Contentions[/]",
+            $"[{theme.CpuCountColor}]{totalCountText}[/]"
+        }
+    };
+
+    PrintSection("Summary");
+    WriteTable(
+        new[]
+        {
+            new TableColumnSpec(string.Empty),
+            new TableColumnSpec(string.Empty)
+        },
+        summaryRows,
+        hideHeaders: true);
 
     var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
     AnsiConsole.Write(BuildContentionCallTree(
@@ -2058,7 +2214,7 @@ void PrintAllocationCallTree(
         var header = $"{NameFormatter.FormatTypeDisplayName(root.Name)} ({bytesText}, {pctText}%, {countText}x)";
 
         var tree = BuildAllocationCallTree(root, includeRuntime, maxDepth, maxWidth, siblingCutoffPercent);
-        AnsiConsole.Write(new Rows(new Markup($"[bold yellow]{Markup.Escape(header)}[/]"), tree));
+    AnsiConsole.Write(new Rows(new Markup($"[bold {theme.AccentColor}]{Markup.Escape(header)}[/]"), tree));
     }
 }
 
@@ -2138,7 +2294,7 @@ IRenderable BuildContentionCallTree(
         }
         else
         {
-            AnsiConsole.MarkupLine($"[yellow]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
+            AnsiConsole.MarkupLine($"[{theme.AccentColor}]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
         }
     }
 
@@ -2151,7 +2307,7 @@ IRenderable BuildContentionCallTree(
         countSuffix: "x");
     var tree = new Tree(rootLabel)
     {
-        Style = new Style(Color.Grey),
+        Style = treeGuideStyle,
         Guide = new CompactTreeGuide()
     };
     var children = CallTreeFilters.GetVisibleChildren(
@@ -2199,7 +2355,7 @@ IRenderable BuildContentionCallTree(
     }
 
     return new Rows(
-        new Markup($"[bold yellow]{title}[/]"),
+        new Markup($"[bold {theme.AccentColor}]{title}[/]"),
         tree);
 }
 
@@ -2232,14 +2388,14 @@ IRenderable BuildExceptionCallTree(
         }
         else
         {
-            AnsiConsole.MarkupLine($"[yellow]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
+            AnsiConsole.MarkupLine($"[{theme.AccentColor}]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
         }
     }
 
     var rootLabel = FormatExceptionCallTreeLine(rootNode, rootTotal, isRoot: true, rootLabelOverride);
     var tree = new Tree(rootLabel)
     {
-        Style = new Style(Color.Grey),
+        Style = treeGuideStyle,
         Guide = new CompactTreeGuide()
     };
     var children = CallTreeFilters.GetVisibleChildren(
@@ -2276,7 +2432,7 @@ IRenderable BuildExceptionCallTree(
     }
 
     return new Rows(
-        new Markup($"[bold yellow]{title}[/]"),
+        new Markup($"[bold {theme.AccentColor}]{title}[/]"),
         tree);
 }
 
@@ -2290,7 +2446,7 @@ IRenderable BuildAllocationCallTree(
     var rootLabel = FormatAllocationCallTreeLine(root, root.TotalBytes, isRoot: true, isLeaf: false);
     var tree = new Tree(rootLabel)
     {
-        Style = new Style(Color.Grey),
+        Style = treeGuideStyle,
         Guide = new CompactTreeGuide()
     };
     var children = GetVisibleAllocationChildren(root, includeRuntime, maxWidth, siblingCutoffPercent);
@@ -2433,10 +2589,10 @@ string FormatAllocationCallTreeLine(
     }
 
     var nameText = isRoot
-        ? $"[white]{Markup.Escape(displayName)}[/]"
+        ? $"[{theme.TextColor}]{Markup.Escape(displayName)}[/]"
         : FormatCallTreeName(displayName, displayName, isLeaf);
 
-    return $"[green]{bytesText}[/] [cyan]{pctText}%[/] [blue]{countText}x[/] {nameText}";
+    return $"[{theme.CpuValueColor}]{bytesText}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}x[/] {nameText}";
 }
 
 IRenderable BuildCallTree(
@@ -2474,7 +2630,7 @@ IRenderable BuildCallTree(
         }
         else
         {
-            AnsiConsole.MarkupLine($"[yellow]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
+            AnsiConsole.MarkupLine($"[{theme.AccentColor}]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
         }
     }
 
@@ -2517,7 +2673,7 @@ IRenderable BuildCallTree(
             timeline);
 
         // Build combined output - each row is tree + padding + timeline on one line
-        var outputLines = new List<IRenderable> { new Markup($"[bold yellow]{title}[/]") };
+    var outputLines = new List<IRenderable> { new Markup($"[bold {theme.AccentColor}]{title}[/]") };
         foreach (var (treeText, visibleLength, timelineBar) in rows)
         {
             var padding = Math.Max(0, treeColumnWidth - visibleLength);
@@ -2540,7 +2696,7 @@ IRenderable BuildCallTree(
         depth: 0);
     var tree = new Tree(rootLabel)
     {
-        Style = new Style(Color.Grey),
+        Style = treeGuideStyle,
         Guide = new CompactTreeGuide()
     };
     if (allocationTypeLimit > 0)
@@ -2599,7 +2755,7 @@ IRenderable BuildCallTree(
     }
 
     return new Rows(
-        new Markup($"[bold yellow]{title}[/]"),
+        new Markup($"[bold {theme.AccentColor}]{title}[/]"),
         tree);
 }
 
@@ -2721,12 +2877,12 @@ void CollectTimelineRows(
     var escapedName = Markup.Escape(truncatedName);
     if (ShouldStopAtLeaf(matchName))
     {
-        escapedName = $"[{LeafHighlightColor}]{escapedName}[/]";
+        escapedName = $"[{theme.LeafHighlightColor}]{escapedName}[/]";
     }
 
     var visibleLength = statsLength + truncatedName.Length;
 
-    return ($"[dim]{Markup.Escape(prefix)}[/][green]{timeText} {timeUnitLabel}[/] [cyan]{pctText}%[/] [blue]{countText}[/] {escapedName}", visibleLength);
+    return ($"[dim]{Markup.Escape(prefix)}[/][{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}[/] {escapedName}", visibleLength);
 }
 
 void AddCallTreeChildren(
@@ -2813,7 +2969,6 @@ void AddAllocationTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)
         return;
     }
 
-    const string allocationHighlightColor = "#c8b6ff";
     foreach (var entry in node.AllocationByType.OrderByDescending(kv => kv.Value).Take(limit))
     {
         var typeName = NameFormatter.FormatTypeDisplayName(entry.Key);
@@ -2825,7 +2980,7 @@ void AddAllocationTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)
         var countText = count > 0
             ? count.ToString("N0", CultureInfo.InvariantCulture) + "x"
             : "0x";
-        var line = $"[{allocationHighlightColor}]{bytesText}[/] [dim]{countText}[/] {Markup.Escape(typeName)}";
+        var line = $"[{theme.MemoryValueColor}]{bytesText}[/] [{theme.MemoryCountColor}]{countText}[/] {Markup.Escape(typeName)}";
         parent.AddNode(line);
     }
 }
@@ -2926,7 +3081,7 @@ string FormatCallTreeLine(
 
     var nameText = FormatCallTreeName(displayName, matchName, isLeaf);
 
-    var baseLine = $"[green]{timeText} {timeUnitLabel}[/] [cyan]{pctText}%[/] [blue]{countText}[/] {nameText}";
+    var baseLine = $"[{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}[/] {nameText}";
 
     // Add timeline bar if enabled
     if (timeline != null && node.HasTiming)
@@ -3093,7 +3248,7 @@ string FormatExceptionCallTreeLine(
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
     var nameText = FormatCallTreeName(displayName, matchName, isLeaf);
 
-    return $"[green]{countText}x[/] [cyan]{pctText}%[/] {nameText}";
+    return $"[{theme.CpuValueColor}]{countText}x[/] [{theme.SampleColor}]{pctText}%[/] {nameText}";
 }
 
 double GetCallTreeTime(CallTreeNode node, bool useSelfTime)
@@ -3185,13 +3340,8 @@ void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? alloca
         return;
     }
 
-    var table = new Table()
-        .Border(TableBorder.None)
-        .AddColumn(new TableColumn("[yellow]Type[/]"))
-        .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
-        .AddColumn(new TableColumn("[yellow]Total[/]").RightAligned());
-
     long totalCount = 0;
+    var rows = new List<IReadOnlyList<string>>();
 
     foreach (var entry in entries)
     {
@@ -3202,26 +3352,39 @@ void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? alloca
         }
         var count = entry.Count;
         var totalText = entry.Total ?? string.Empty;
+        var paddedTotalText = totalText.Length == 0 ? totalText : " " + totalText;
 
         totalCount += count;
 
         var countText = count.ToString("N0", CultureInfo.InvariantCulture);
-        table.AddRow(
-            $"[white]{Markup.Escape(typeName)}[/]",
-            $"[blue]{Markup.Escape(countText)}[/]",
-            $"[green]{Markup.Escape(totalText)}[/]");
+        rows.Add(new[]
+        {
+            $"[{theme.TextColor}]{Markup.Escape(typeName)}[/]",
+            $"[{theme.MemoryCountColor}]{Markup.Escape(countText)}[/]",
+            $"[{theme.MemoryValueColor}]{Markup.Escape(paddedTotalText)}[/]"
+        });
     }
 
     if (!string.IsNullOrWhiteSpace(allocationTotal))
     {
         var countText = totalCount.ToString("N0", CultureInfo.InvariantCulture);
-        table.AddRow(
-            "[bold white]TOTAL (shown)[/]",
-            $"[bold blue]{Markup.Escape(countText)}[/]",
-            $"[bold green]{Markup.Escape(allocationTotal)}[/]");
+        var paddedAllocationTotal = " " + allocationTotal;
+        rows.Add(new[]
+        {
+            $"[bold {theme.TextColor}]TOTAL (shown)[/]",
+            $"[bold {theme.MemoryCountColor}]{Markup.Escape(countText)}[/]",
+            $"[bold {theme.MemoryValueColor}]{Markup.Escape(paddedAllocationTotal)}[/]"
+        });
     }
 
-    AnsiConsole.Write(table);
+    WriteTable(
+        new[]
+        {
+            new TableColumnSpec("Type"),
+            new TableColumnSpec("Count", RightAligned: true),
+            new TableColumnSpec(" Total", RightAligned: true)
+        },
+        rows);
 }
 
 string FormatBytes(long bytes)
@@ -3293,15 +3456,15 @@ string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
     var escaped = Markup.Escape(displayName);
     if (!isLeaf)
     {
-        return $"[white]{escaped}[/]";
+        return $"[{theme.TextColor}]{escaped}[/]";
     }
 
     if (ShouldStopAtLeaf(matchName))
     {
-        return $"[{LeafHighlightColor}]{escaped}[/]";
+        return $"[{theme.LeafHighlightColor}]{escaped}[/]";
     }
 
-    return $"[white]{escaped}[/]";
+    return $"[{theme.TextColor}]{escaped}[/]";
 }
 
 string GetCallTreeMatchName(CallTreeNode node)
@@ -3421,7 +3584,7 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
 
     if (command.Length == 0)
     {
-        AnsiConsole.MarkupLine("[red]No command provided for heap snapshot.[/]");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No command provided for heap snapshot.[/]");
         return null;
     }
 
@@ -3443,7 +3606,7 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
 
     if (proc == null)
     {
-        AnsiConsole.MarkupLine("[red]Failed to start process for heap snapshot.[/]");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Failed to start process for heap snapshot.[/]");
         return null;
     }
 
@@ -3465,7 +3628,7 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
 
     if (!success || !File.Exists(gcdumpFile))
     {
-        AnsiConsole.MarkupLine($"[red]GC dump collection failed:[/] {Markup.Escape(stderr)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]GC dump collection failed:[/] {Markup.Escape(stderr)}");
         return null;
     }
 
@@ -3479,7 +3642,7 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
         return ParseGcdumpReport(reportOut);
     }
 
-    AnsiConsole.MarkupLine($"[yellow]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
+    AnsiConsole.MarkupLine($"[{theme.AccentColor}]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
     return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
 }
 
@@ -3487,7 +3650,7 @@ HeapProfileResult? HeapProfileFromInput(string inputPath)
 {
     if (!File.Exists(inputPath))
     {
-        AnsiConsole.MarkupLine($"[red]Input file not found:[/] {Markup.Escape(inputPath)}");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
         return null;
     }
 
@@ -3509,7 +3672,7 @@ HeapProfileResult? HeapProfileFromInput(string inputPath)
             return ParseGcdumpReport(reportOut);
         }
 
-        AnsiConsole.MarkupLine($"[yellow]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
         return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
     }
 
@@ -3519,7 +3682,7 @@ HeapProfileResult? HeapProfileFromInput(string inputPath)
         return ParseGcdumpReport(report);
     }
 
-    AnsiConsole.MarkupLine($"[red]Unsupported heap input:[/] {Markup.Escape(inputPath)}");
+    AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported heap input:[/] {Markup.Escape(inputPath)}");
     return null;
 }
 
@@ -3579,7 +3742,7 @@ void PrintHeapResults(HeapProfileResult? results, string profileName, string? de
 {
     if (results == null)
     {
-        AnsiConsole.MarkupLine("[red]No results to display[/]");
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No results to display[/]");
         return;
     }
 
@@ -3591,21 +3754,29 @@ void PrintHeapResults(HeapProfileResult? results, string profileName, string? de
 
     if (results.Types.Count > 0)
     {
-        var table = new Table()
-            .Border(TableBorder.None)
-            .AddColumn(new TableColumn("[yellow]Size (bytes)[/]").RightAligned())
-            .AddColumn(new TableColumn("[yellow]Count[/]").RightAligned())
-            .AddColumn(new TableColumn("[yellow]Type[/]"));
+        var rows = new List<IReadOnlyList<string>>();
 
         foreach (var entry in results.Types.Take(40))
         {
             var sizeText = entry.Size.ToString("N0", CultureInfo.InvariantCulture);
             var countText = entry.Count.ToString("N0", CultureInfo.InvariantCulture);
             var typeName = entry.Type.Length > 60 ? entry.Type[..57] + "..." : entry.Type;
-            table.AddRow(sizeText, countText, Markup.Escape(typeName));
+            rows.Add(new[]
+            {
+                sizeText,
+                countText,
+                Markup.Escape(typeName)
+            });
         }
 
-        AnsiConsole.Write(table);
+        WriteTable(
+            new[]
+            {
+                new TableColumnSpec("Size (bytes)", RightAligned: true),
+                new TableColumnSpec("Count", RightAligned: true),
+                new TableColumnSpec("Type")
+            },
+            rows);
     }
     else if (!string.IsNullOrWhiteSpace(results.RawOutput))
     {
@@ -3684,6 +3855,8 @@ var exceptionTypeOption = new Option<string?>("--exception-type", "Filter except
 var includeRuntimeOption = new Option<bool>("--include-runtime", "Include runtime/process frames in CPU tables and call tree");
 var inputOption = new Option<string?>("--input", "Render results from an existing trace file");
 var targetFrameworkOption = new Option<string?>("--tfm", "Target framework to use for .csproj/.sln inputs (e.g. net8.0)");
+var themeOption = new Option<string?>("--theme", "Color theme (default|onedark|dracula|nord|monokai)");
+themeOption.AddAlias("-t");
 var commandArg = new Argument<string[]>("command", () => Array.Empty<string>(),
     "Command to profile (pass after --)");
 commandArg.Arity = ArgumentArity.ZeroOrMore;
@@ -3708,6 +3881,7 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Cont
     includeRuntimeOption,
     inputOption,
     targetFrameworkOption,
+    themeOption,
     commandArg
 };
 
@@ -3733,7 +3907,13 @@ rootCommand.SetHandler(context =>
     var includeRuntime = context.ParseResult.GetValueForOption(includeRuntimeOption);
     var inputPath = context.ParseResult.GetValueForOption(inputOption);
     var targetFramework = context.ParseResult.GetValueForOption(targetFrameworkOption);
+    var themeName = context.ParseResult.GetValueForOption(themeOption);
     var command = context.ParseResult.GetValueForArgument(commandArg) ?? Array.Empty<string>();
+
+    if (!TryApplyTheme(themeName))
+    {
+        return;
+    }
 
     var hasInput = !string.IsNullOrWhiteSpace(inputPath);
     var hasExplicitModes = cpu || memory || heap || contention || exception;
@@ -3759,7 +3939,7 @@ rootCommand.SetHandler(context =>
     {
         if (command.Length == 0)
         {
-            AnsiConsole.MarkupLine("[red]No command provided.[/]");
+            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No command provided.[/]");
             WriteUsageExamples(Console.Out);
             return;
         }
@@ -3900,3 +4080,5 @@ var parser = new CommandLineBuilder(rootCommand)
     .Build();
 
 return await parser.InvokeAsync(args);
+
+record TableColumnSpec(string Header, bool RightAligned = false);
