@@ -10,6 +10,9 @@ public sealed class NameFormatterTests
     [InlineData("PromiseConstructor.<AttachStatics>b__5_0", "PromiseConstructor.AttachStatics lambda")]
     [InlineData("Asynkron.JsEngine.Ast.TypedAstEvaluator+TypedFunction.InvokeWithContext2(System.Int32)",
         "TypedAstEvaluator.TypedFunction.InvokeWithContext2")]
+    [InlineData("0)", "Unmanaged Code")]
+    [InlineData("0[]&,int32)", "Unmanaged Code")]
+    [InlineData("0&,unsigned int)", "Unmanaged Code")]
     public void FormatsMethodNames(string raw, string expected)
     {
         var actual = NameFormatter.FormatMethodDisplayName(raw);

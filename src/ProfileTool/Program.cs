@@ -2457,7 +2457,7 @@ void CollectTimelineRows(
     int maxWidth)
 {
     var matchName = GetCallTreeMatchName(node);
-    var displayName = NameFormatter.FormatMethodDisplayName(matchName);
+    var displayName = GetCallTreeDisplayName(matchName);
 
     var timeSpent = isRoot && useSelfTime
         ? GetCallTreeTime(node, useSelfTime: false)
@@ -2607,7 +2607,7 @@ string FormatCallTreeLine(
     int depth = 0)
 {
     var matchName = GetCallTreeMatchName(node);
-    var displayName = matchName;
+    var displayName = GetCallTreeDisplayName(matchName);
 
     // Calculate max name length based on actual depth (shallower = more space)
     int maxNameLen;
@@ -2795,7 +2795,7 @@ string FormatExceptionCallTreeLine(
     var matchName = GetCallTreeMatchName(node);
     var displayName = isRoot && !string.IsNullOrWhiteSpace(rootLabelOverride)
         ? rootLabelOverride
-        : matchName;
+        : GetCallTreeDisplayName(matchName);
     if (displayName.Length > 80)
     {
         displayName = displayName[..77] + "...";
@@ -3002,7 +3002,8 @@ string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
     }
 
     const string leafHighlightColor = "plum1";
-    if (matchName.Contains("CastHelpers.", StringComparison.Ordinal))
+    if (matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
+        matchName.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal))
     {
         return $"[{leafHighlightColor}]{escaped}[/]";
     }
@@ -3034,9 +3035,20 @@ string GetCallTreeMatchName(CallTreeNode node)
     return NameFormatter.FormatMethodDisplayName(node.Name);
 }
 
+string GetCallTreeDisplayName(string matchName)
+{
+    if (matchName.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal))
+    {
+        return "Unmanaged Code";
+    }
+
+    return matchName;
+}
+
 bool ShouldStopAtLeaf(string matchName)
 {
     return matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
+           matchName.Contains("UNMANAGED_CODE_TIME", StringComparison.Ordinal) ||
            matchName.Contains("Array.Copy", StringComparison.Ordinal) ||
            matchName.Contains("Dictionary<__Canon,__Canon>.Resize", StringComparison.Ordinal) ||
            matchName.Contains("Buffer.BulkMoveWithWriteBarrier", StringComparison.Ordinal) ||

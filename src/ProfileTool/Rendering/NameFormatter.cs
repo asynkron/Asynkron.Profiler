@@ -12,16 +12,10 @@ internal static class NameFormatter
             return rawName;
         }
 
-        var name = rawName;
+        var name = StripParameterList(rawName);
         if (name.Contains('!'))
         {
-            name = name.Split('!')[^1];
-        }
-
-        var parenIdx = name.IndexOf('(');
-        if (parenIdx > 0)
-        {
-            name = name[..parenIdx];
+            name = StripParameterList(name.Split('!')[^1]);
         }
 
         var lastDot = name.LastIndexOf('.');
@@ -35,10 +29,11 @@ internal static class NameFormatter
                 return compilerGenerated;
             }
 
-            return $"{CleanTypeName(typePart)}.{methodPart}";
+            var formatted = $"{CleanTypeName(typePart)}.{methodPart}";
+            return EnsureReadableName(formatted);
         }
 
-        return CleanTypeName(name);
+        return EnsureReadableName(CleanTypeName(name));
     }
 
     public static string FormatTypeDisplayName(string rawName)
@@ -80,6 +75,92 @@ internal static class NameFormatter
         normalized = normalized.Replace('+', '.');
 
         return normalized;
+    }
+
+    private static string StripParameterList(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return name;
+        }
+
+        var trimmed = name.Trim();
+        var parenIdx = trimmed.IndexOf('(');
+        if (parenIdx >= 0)
+        {
+            trimmed = trimmed[..parenIdx];
+        }
+        else
+        {
+            var cutIdx = FindFirstTopLevelSeparator(trimmed);
+            if (cutIdx >= 0)
+            {
+                trimmed = trimmed[..cutIdx];
+            }
+        }
+
+        return trimmed.TrimEnd(')', '&', ',', ' ');
+    }
+
+    private static string EnsureReadableName(string name)
+    {
+        var trimmed = name?.Trim() ?? string.Empty;
+        if (!HasLetter(trimmed))
+        {
+            return "Unmanaged Code";
+        }
+
+        return trimmed;
+    }
+
+    private static int FindFirstTopLevelSeparator(string name)
+    {
+        var squareDepth = 0;
+        var angleDepth = 0;
+
+        for (var i = 0; i < name.Length; i++)
+        {
+            var ch = name[i];
+            switch (ch)
+            {
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                    {
+                        squareDepth--;
+                    }
+                    break;
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                    {
+                        angleDepth--;
+                    }
+                    break;
+                case ',' when squareDepth == 0 && angleDepth == 0:
+                case ')' when squareDepth == 0 && angleDepth == 0:
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool HasLetter(string value)
+    {
+        foreach (var ch in value)
+        {
+            if (char.IsLetter(ch))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? FormatCompilerGeneratedMethod(string typePart, string methodPart)
