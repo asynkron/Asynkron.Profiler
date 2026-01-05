@@ -21,6 +21,7 @@ public sealed class CallTreeNode
     public long AllocationBytes { get; set; }
     public int AllocationCount { get; set; }
     public Dictionary<string, long>? AllocationByType { get; private set; }
+    public Dictionary<string, int>? AllocationCountByType { get; private set; }
     public Dictionary<int, CallTreeNode> Children { get; } = new();
 
     /// <summary>
@@ -74,5 +75,15 @@ public sealed class CallTreeNode
         AllocationByType[typeName] = AllocationByType.TryGetValue(typeName, out var existing)
             ? existing + bytes
             : bytes;
+
+        AllocationCountByType ??= new Dictionary<string, int>(StringComparer.Ordinal);
+        if (AllocationCountByType.TryGetValue(typeName, out var count))
+        {
+            AllocationCountByType[typeName] = count < int.MaxValue ? count + 1 : count;
+        }
+        else
+        {
+            AllocationCountByType[typeName] = 1;
+        }
     }
 }

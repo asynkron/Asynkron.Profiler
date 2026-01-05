@@ -2818,7 +2818,14 @@ void AddAllocationTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)
     {
         var typeName = NameFormatter.FormatTypeDisplayName(entry.Key);
         var bytesText = FormatBytes(entry.Value);
-        var line = $"[{allocationHighlightColor}]{bytesText}[/] {Markup.Escape(typeName)}";
+        var count = node.AllocationCountByType != null &&
+                    node.AllocationCountByType.TryGetValue(entry.Key, out var allocationCount)
+            ? allocationCount
+            : 0;
+        var countText = count > 0
+            ? count.ToString("N0", CultureInfo.InvariantCulture) + "x"
+            : "0x";
+        var line = $"[{allocationHighlightColor}]{bytesText}[/] [dim]{countText}[/] {Markup.Escape(typeName)}";
         parent.AddNode(line);
     }
 }
