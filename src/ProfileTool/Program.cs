@@ -354,9 +354,10 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
             frames.Reverse();
 
             var node = callTreeRoot;
-            node.AddAllocation(typeName, bytes);
-            foreach (var frame in frames)
+            node.AddAllocationTotals(bytes);
+            for (var i = 0; i < frames.Count; i++)
             {
+                var frame = frames[i];
                 if (!frameIndices.TryGetValue(frame, out var frameIdx))
                 {
                     frameIdx = framesList.Count;
@@ -370,7 +371,15 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
                     node.Children[frameIdx] = child;
                 }
 
-                child.AddAllocation(typeName, bytes);
+                if (i == frames.Count - 1)
+                {
+                    child.AddAllocation(typeName, bytes);
+                }
+                else
+                {
+                    child.AddAllocationTotals(bytes);
+                }
+
                 node = child;
             }
         };
@@ -2804,11 +2813,12 @@ void AddAllocationTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)
         return;
     }
 
+    const string allocationHighlightColor = "#c8b6ff";
     foreach (var entry in node.AllocationByType.OrderByDescending(kv => kv.Value).Take(limit))
     {
         var typeName = NameFormatter.FormatTypeDisplayName(entry.Key);
         var bytesText = FormatBytes(entry.Value);
-        var line = $"[dim]{bytesText}[/] {Markup.Escape(typeName)}";
+        var line = $"[{allocationHighlightColor}]{bytesText}[/] {Markup.Escape(typeName)}";
         parent.AddNode(line);
     }
 }

@@ -47,7 +47,7 @@ public sealed class CallTreeNode
     /// </summary>
     public bool HasTiming => MinStart < double.MaxValue && MaxEnd > double.MinValue;
 
-    public void AddAllocation(string typeName, long bytes)
+    public void AddAllocationTotals(long bytes)
     {
         if (bytes <= 0)
         {
@@ -59,6 +59,16 @@ public sealed class CallTreeNode
         {
             AllocationCount += 1;
         }
+    }
+
+    public void AddAllocation(string typeName, long bytes)
+    {
+        if (bytes <= 0)
+        {
+            return;
+        }
+
+        AddAllocationTotals(bytes);
 
         AllocationByType ??= new Dictionary<string, long>(StringComparer.Ordinal);
         AllocationByType[typeName] = AllocationByType.TryGetValue(typeName, out var existing)
