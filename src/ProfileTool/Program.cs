@@ -102,7 +102,7 @@ Table BuildTable(
     return table;
 }
 
-void WriteTable(
+Table BuildTableWithRows(
     IReadOnlyList<TableColumnSpec> columns,
     IEnumerable<IReadOnlyList<string>> rows,
     string? title = null,
@@ -115,7 +115,24 @@ void WriteTable(
         table.AddRow(row.ToArray());
     }
 
-    AnsiConsole.Write(table);
+    return table;
+}
+
+void WriteTable(
+    IReadOnlyList<TableColumnSpec> columns,
+    IEnumerable<IReadOnlyList<string>> rows,
+    string? title = null,
+    bool hideHeaders = false,
+    string? headerColor = null)
+{
+    AnsiConsole.Write(BuildTableWithRows(columns, rows, title, hideHeaders, headerColor));
+}
+
+IRenderable BuildTableBlock(Table table, string title, string color)
+{
+    return new Rows(
+        new Markup($"[{color}]{Markup.Escape(title)}[/]"),
+        table);
 }
 
 IReadOnlyList<string> GetUsageExampleLines()
@@ -614,7 +631,8 @@ void PrintCpuResults(
     bool showSelfTimeTree,
     int callTreeSiblingCutoffPercent,
     bool showTimeline = false,
-    int timelineWidth = 40)
+    int timelineWidth = 40,
+    MemoryProfileResult? memoryResults = null)
 {
     if (results == null)
     {
@@ -651,7 +669,6 @@ void PrintCpuResults(
         ? "Samples"
         : $"Time ({timeUnitLabel})";
     var rows = new List<IReadOnlyList<string>>();
-    PrintSection(topTitle, theme.CpuCountColor);
 
     foreach (var entry in filteredList.Take(15))
     {
@@ -676,7 +693,7 @@ void PrintCpuResults(
         });
     }
 
-    WriteTable(
+    var topTable = BuildTableWithRows(
         new[]
         {
             new TableColumnSpec("Function"),
@@ -684,6 +701,26 @@ void PrintCpuResults(
             new TableColumnSpec(timeColumnLabel, RightAligned: true)
         },
         rows);
+
+    var allocationTable = memoryResults == null
+        ? null
+        : BuildAllocationTable(memoryResults.AllocationEntries, memoryResults.AllocationTotal);
+
+    if (allocationTable != null)
+    {
+        var grid = new Grid();
+        grid.AddColumn();
+        grid.AddColumn();
+        grid.AddRow(
+            BuildTableBlock(topTable, topTitle, theme.CpuCountColor),
+            BuildTableBlock(allocationTable, "Allocation By Type (Sampled)", theme.MemoryCountColor));
+        AnsiConsole.Write(grid);
+    }
+    else
+    {
+        PrintSection(topTitle, theme.CpuCountColor);
+        AnsiConsole.Write(topTable);
+    }
     var filteredOut = allFunctions.Count - filteredList.Count;
     if (filteredOut > 0)
     {
@@ -3333,11 +3370,11 @@ string NormalizeRootMode(string? rootMode)
     return rootMode.Trim().ToLowerInvariant();
 }
 
-void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? allocationTotal)
+Table? BuildAllocationTable(IReadOnlyList<AllocationEntry> entries, string? allocationTotal)
 {
     if (entries.Count == 0)
     {
-        return;
+        return null;
     }
 
     long totalCount = 0;
@@ -3377,7 +3414,7 @@ void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? alloca
         });
     }
 
-    WriteTable(
+    return BuildTableWithRows(
         new[]
         {
             new TableColumnSpec("Type"),
@@ -3385,6 +3422,17 @@ void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? alloca
             new TableColumnSpec(" Total", RightAligned: true)
         },
         rows);
+}
+
+void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? allocationTotal)
+{
+    var table = BuildAllocationTable(entries, allocationTotal);
+    if (table == null)
+    {
+        return;
+    }
+
+    AnsiConsole.Write(table);
 }
 
 string FormatBytes(long bytes)
@@ -3965,47 +4013,95 @@ rootCommand.SetHandler(context =>
         }
     }
 
-    if (runCpu)
+    if (runCpu && runMemory)
     {
-        Console.WriteLine($"{label} - cpu");
-        var results = hasInput
+        Console.WriteLine($"{label} - cpu+memory");
+        var cpuResults = hasInput
             ? CpuProfileFromInput(inputPath!, label)
             : sharedTraceFile != null
                 ? AnalyzeCpuTrace(sharedTraceFile)
                 : CpuProfileCommand(command, label);
-        PrintCpuResults(
-            results,
-            label,
-            description,
-            callTreeRoot,
-            functionFilter,
-            includeRuntime,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeRootMode,
-            callTreeSelf,
-            callTreeSiblingCutoff,
-            timeline,
-            timelineWidth);
-    }
-
-    if (runMemory)
-    {
-        Console.WriteLine($"{label} - memory");
-        var results = hasInput
+        var memoryResults = hasInput
             ? MemoryProfileFromInput(inputPath!, label)
             : sharedTraceFile != null
                 ? MemoryProfileFromInput(sharedTraceFile, label)
                 : MemoryProfileCommand(command, label);
-        PrintMemoryResults(
-            results,
-            label,
-            description,
-            callTreeRoot,
-            includeRuntime,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeSiblingCutoff);
+
+        if (cpuResults != null)
+        {
+            PrintCpuResults(
+                cpuResults,
+                label,
+                description,
+                callTreeRoot,
+                functionFilter,
+                includeRuntime,
+                callTreeDepth,
+                callTreeWidth,
+                callTreeRootMode,
+                callTreeSelf,
+                callTreeSiblingCutoff,
+                timeline,
+                timelineWidth,
+                memoryResults: memoryResults);
+        }
+        else if (memoryResults != null)
+        {
+            PrintMemoryResults(
+                memoryResults,
+                label,
+                description,
+                callTreeRoot,
+                includeRuntime,
+                callTreeDepth,
+                callTreeWidth,
+                callTreeSiblingCutoff);
+        }
+    }
+    else
+    {
+        if (runCpu)
+        {
+            Console.WriteLine($"{label} - cpu");
+            var results = hasInput
+                ? CpuProfileFromInput(inputPath!, label)
+                : sharedTraceFile != null
+                    ? AnalyzeCpuTrace(sharedTraceFile)
+                    : CpuProfileCommand(command, label);
+            PrintCpuResults(
+                results,
+                label,
+                description,
+                callTreeRoot,
+                functionFilter,
+                includeRuntime,
+                callTreeDepth,
+                callTreeWidth,
+                callTreeRootMode,
+                callTreeSelf,
+                callTreeSiblingCutoff,
+                timeline,
+                timelineWidth);
+        }
+
+        if (runMemory)
+        {
+            Console.WriteLine($"{label} - memory");
+            var results = hasInput
+                ? MemoryProfileFromInput(inputPath!, label)
+                : sharedTraceFile != null
+                    ? MemoryProfileFromInput(sharedTraceFile, label)
+                    : MemoryProfileCommand(command, label);
+            PrintMemoryResults(
+                results,
+                label,
+                description,
+                callTreeRoot,
+                includeRuntime,
+                callTreeDepth,
+                callTreeWidth,
+                callTreeSiblingCutoff);
+        }
     }
 
     if (runException)
