@@ -15,6 +15,7 @@ using Spectre.Console;
 using Spectre.Console.Rendering;
 
 const int AllocationTypeLimit = 3;
+const int ExceptionTypeLimit = 3;
 var theme = Theme.Current;
 var treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
 
@@ -337,7 +338,14 @@ bool EnsureToolAvailable(string toolName, string installHint)
     return true;
 }
 
-string? CollectCpuMemoryTrace(string[] command, string label)
+string BuildExceptionProvider()
+{
+    var keywordsValue = ClrTraceEventParser.Keywords.Exception;
+    var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
+    return $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
+}
+
+string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool includeException)
 {
     if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
     {
@@ -346,23 +354,46 @@ string? CollectCpuMemoryTrace(string[] command, string label)
 
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
     var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.nettrace");
+    var traceParts = new List<string> { "CPU" };
+    if (includeMemory)
+    {
+        traceParts.Add("allocation");
+    }
+
+    if (includeException)
+    {
+        traceParts.Add("exception");
+    }
+
+    var traceLabel = string.Join(" + ", traceParts);
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting CPU + allocation trace for [{theme.AccentColor}]{label}[/]...", ctx =>
+        .Start($"Collecting {traceLabel} trace for [{theme.AccentColor}]{label}[/]...", ctx =>
         {
             ctx.Status("Collecting trace data...");
-            var collectArgs = new List<string>
+            var collectArgs = new List<string> { "collect" };
+            if (includeMemory)
             {
-                "collect",
-                "--profile",
-                "gc-verbose",
-                "--providers",
-                "Microsoft-DotNETCore-SampleProfiler",
-                "--output",
-                traceFile,
-                "--"
-            };
+                collectArgs.Add("--profile");
+                collectArgs.Add("gc-verbose");
+            }
+
+            var providers = new List<string> { "Microsoft-DotNETCore-SampleProfiler" };
+            if (includeException)
+            {
+                providers.Add(BuildExceptionProvider());
+            }
+
+            if (providers.Count > 0)
+            {
+                collectArgs.Add("--providers");
+                collectArgs.Add(string.Join(",", providers));
+            }
+
+            collectArgs.Add("--output");
+            collectArgs.Add(traceFile);
+            collectArgs.Add("--");
             collectArgs.AddRange(command);
             var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
 
@@ -431,6 +462,7 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
         var callTreeTotal = 0d;
         var totalSamples = 0L;
         double? lastSampleTimeMs = null;
+        var sawTypedException = false;
 
         var etlxPath = traceFile;
         if (traceFile.EndsWith(".nettrace", StringComparison.OrdinalIgnoreCase))
@@ -445,6 +477,54 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
         using var source = traceLog.Events.GetSource();
 
         const string sampleProfilerProvider = "Microsoft-DotNETCore-SampleProfiler";
+
+        void RecordException(TraceEvent data)
+        {
+            var stack = data.CallStack();
+            if (stack == null)
+            {
+                return;
+            }
+
+            var typeName = GetExceptionTypeName(data);
+            var frames = EnumerateCpuFrames(stack).ToList();
+            if (frames.Count == 0)
+            {
+                frames.Add("Unknown");
+            }
+
+            frames.Reverse();
+
+            var node = callTreeRoot;
+            node.AddExceptionTotals(1);
+            for (var i = 0; i < frames.Count; i++)
+            {
+                var frame = frames[i];
+                if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                {
+                    frameIdx = framesList.Count;
+                    framesList.Add(frame);
+                    frameIndices[frame] = frameIdx;
+                }
+
+                if (!node.Children.TryGetValue(frameIdx, out var child))
+                {
+                    child = new CallTreeNode(frameIdx, frame);
+                    node.Children[frameIdx] = child;
+                }
+
+                if (i == frames.Count - 1)
+                {
+                    child.AddException(typeName, 1);
+                }
+                else
+                {
+                    child.AddExceptionTotals(1);
+                }
+
+                node = child;
+            }
+        }
 
         source.Clr.GCAllocationTick += data =>
         {
@@ -499,6 +579,34 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
                 node = child;
             }
         };
+
+        source.Clr.ExceptionStart += data =>
+        {
+            sawTypedException = true;
+            RecordException(data);
+        };
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ExceptionStart",
+            data =>
+            {
+                if (!sawTypedException)
+                {
+                    RecordException(data);
+                }
+            });
+
+        source.Dynamic.AddCallbackForProviderEvent(
+            "Microsoft-Windows-DotNETRuntime",
+            "ExceptionThrown",
+            data =>
+            {
+                if (!sawTypedException)
+                {
+                    RecordException(data);
+                }
+            });
 
         source.Dynamic.All += data =>
         {
@@ -653,6 +761,7 @@ void PrintCpuResults(
     var countLabel = results.CountLabel;
     var countSuffix = results.CountSuffix;
     var allocationTypeLimit = results.CallTreeRoot.AllocationBytes > 0 ? AllocationTypeLimit : 0;
+    var exceptionTypeLimit = results.CallTreeRoot.ExceptionCount > 0 ? ExceptionTypeLimit : 0;
 
     // Top functions overall - using Spectre table
     var filteredAll = allFunctions.Where(entry => MatchesFunctionFilter(entry.Name, functionFilter));
@@ -781,6 +890,7 @@ void PrintCpuResults(
         timeUnitLabel,
         countSuffix,
         allocationTypeLimit,
+        exceptionTypeLimit,
         showTimeline,
         timelineWidth));
     if (showSelfTimeTree)
@@ -797,6 +907,7 @@ void PrintCpuResults(
             timeUnitLabel,
             countSuffix,
             allocationTypeLimit,
+            exceptionTypeLimit,
             showTimeline: false)); // Don't show timeline on self-time tree
     }
 }
@@ -952,9 +1063,7 @@ ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
 
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
     var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.exc.nettrace");
-    var keywordsValue = ClrTraceEventParser.Keywords.Exception;
-    var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
-    var provider = $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
+    var provider = BuildExceptionProvider();
 
     return AnsiConsole.Status()
         .Spinner(Spinner.Known.Dots)
@@ -2387,6 +2496,7 @@ IRenderable BuildContentionCallTree(
                 siblingCutoffPercent,
                 "ms",
                 "x",
+                0,
                 0);
         }
     }
@@ -2644,6 +2754,7 @@ IRenderable BuildCallTree(
     string timeUnitLabel,
     string countSuffix,
     int allocationTypeLimit,
+    int exceptionTypeLimit,
     bool showTimeline = false,
     int timelineWidth = 40)
 {
@@ -2740,6 +2851,10 @@ IRenderable BuildCallTree(
     {
         AddAllocationTypeNodes(tree, rootNode, allocationTypeLimit);
     }
+    if (exceptionTypeLimit > 0)
+    {
+        AddExceptionTypeNodes(tree, rootNode, exceptionTypeLimit);
+    }
     var children = CallTreeFilters.GetVisibleChildren(
         rootNode,
         includeRuntime,
@@ -2772,6 +2887,10 @@ IRenderable BuildCallTree(
         {
             AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
         }
+        if (exceptionTypeLimit > 0)
+        {
+            AddExceptionTypeNodes(childNode, child, exceptionTypeLimit);
+        }
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2787,6 +2906,7 @@ IRenderable BuildCallTree(
                 timeUnitLabel,
                 countSuffix,
                 allocationTypeLimit,
+                exceptionTypeLimit,
                 null);
         }
     }
@@ -2935,6 +3055,7 @@ void AddCallTreeChildren(
     string timeUnitLabel,
     string countSuffix,
     int allocationTypeLimit,
+    int exceptionTypeLimit,
     TimelineContext? timeline = null)
 {
     if (depth > maxDepth)
@@ -2979,6 +3100,10 @@ void AddCallTreeChildren(
         {
             AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
         }
+        if (exceptionTypeLimit > 0)
+        {
+            AddExceptionTypeNodes(childNode, child, exceptionTypeLimit);
+        }
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2994,6 +3119,7 @@ void AddCallTreeChildren(
                 timeUnitLabel,
                 countSuffix,
                 allocationTypeLimit,
+                exceptionTypeLimit,
                 timeline);
         }
     }
@@ -3018,6 +3144,22 @@ void AddAllocationTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)
             ? count.ToString("N0", CultureInfo.InvariantCulture) + "x"
             : "0x";
         var line = $"[{theme.MemoryValueColor}]{bytesText}[/] [{theme.MemoryCountColor}]{countText}[/] {Markup.Escape(typeName)}";
+        parent.AddNode(line);
+    }
+}
+
+void AddExceptionTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)
+{
+    if (limit <= 0 || node.ExceptionByType == null || node.ExceptionByType.Count == 0)
+    {
+        return;
+    }
+
+    foreach (var entry in node.ExceptionByType.OrderByDescending(kv => kv.Value).Take(limit))
+    {
+        var typeName = NameFormatter.FormatTypeDisplayName(entry.Key);
+        var countText = entry.Value.ToString("N0", CultureInfo.InvariantCulture) + "x";
+        var line = $"[{theme.ErrorColor}]{countText}[/] {Markup.Escape(typeName)}";
         parent.AddNode(line);
     }
 }
@@ -4004,9 +4146,9 @@ rootCommand.SetHandler(context =>
     }
 
     string? sharedTraceFile = null;
-    if (!hasInput && runCpu && runMemory)
+    if (!hasInput && runCpu && (runMemory || runException))
     {
-        sharedTraceFile = CollectCpuMemoryTrace(command, label);
+        sharedTraceFile = CollectCpuTrace(command, label, runMemory, runException);
         if (sharedTraceFile == null)
         {
             return;
@@ -4109,7 +4251,9 @@ rootCommand.SetHandler(context =>
         Console.WriteLine($"{label} - exception");
         var results = hasInput
             ? ExceptionProfileFromInput(inputPath!, label)
-            : ExceptionProfileCommand(command, label);
+            : sharedTraceFile != null
+                ? ExceptionProfileFromInput(sharedTraceFile, label)
+                : ExceptionProfileCommand(command, label);
         PrintExceptionResults(
             results,
             label,

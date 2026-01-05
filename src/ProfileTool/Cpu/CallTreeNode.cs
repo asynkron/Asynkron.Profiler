@@ -20,8 +20,10 @@ public sealed class CallTreeNode
     public int Calls { get; set; }
     public long AllocationBytes { get; set; }
     public int AllocationCount { get; set; }
+    public long ExceptionCount { get; set; }
     public Dictionary<string, long>? AllocationByType { get; private set; }
     public Dictionary<string, int>? AllocationCountByType { get; private set; }
+    public Dictionary<string, long>? ExceptionByType { get; private set; }
     public Dictionary<int, CallTreeNode> Children { get; } = new();
 
     /// <summary>
@@ -85,5 +87,30 @@ public sealed class CallTreeNode
         {
             AllocationCountByType[typeName] = 1;
         }
+    }
+
+    public void AddExceptionTotals(long count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        ExceptionCount += count;
+    }
+
+    public void AddException(string typeName, long count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        AddExceptionTotals(count);
+
+        ExceptionByType ??= new Dictionary<string, long>(StringComparer.Ordinal);
+        ExceptionByType[typeName] = ExceptionByType.TryGetValue(typeName, out var existing)
+            ? existing + count
+            : count;
     }
 }
