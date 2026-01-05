@@ -14,6 +14,8 @@ using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
+const string LeafHighlightColor = "orange1";
+
 void PrintSection(string text)
 {
     Console.WriteLine();
@@ -2611,7 +2613,7 @@ void CollectTimelineRows(
     var escapedName = Markup.Escape(truncatedName);
     if (ShouldStopAtLeaf(matchName))
     {
-        escapedName = $"[orange1]{escapedName}[/]";
+        escapedName = $"[{LeafHighlightColor}]{escapedName}[/]";
     }
 
     var visibleLength = statsLength + truncatedName.Length;
@@ -3156,10 +3158,9 @@ string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
         return $"[white]{escaped}[/]";
     }
 
-    const string leafHighlightColor = "orange1";
     if (ShouldStopAtLeaf(matchName))
     {
-        return $"[{leafHighlightColor}]{escaped}[/]";
+        return $"[{LeafHighlightColor}]{escaped}[/]";
     }
 
     return $"[white]{escaped}[/]";
