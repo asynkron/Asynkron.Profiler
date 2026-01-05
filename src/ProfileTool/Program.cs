@@ -15,6 +15,7 @@ using Spectre.Console;
 using Spectre.Console.Rendering;
 
 const string LeafHighlightColor = "#9a9a9a";
+const int AllocationTypeLimit = 3;
 
 void PrintSection(string text)
 {
@@ -220,6 +221,45 @@ bool EnsureToolAvailable(string toolName, string installHint)
     return true;
 }
 
+string? CollectCpuMemoryTrace(string[] command, string label)
+{
+    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    {
+        return null;
+    }
+
+    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.nettrace");
+
+    return AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .Start($"Collecting CPU + allocation trace for [yellow]{label}[/]...", ctx =>
+        {
+            ctx.Status("Collecting trace data...");
+            var collectArgs = new List<string>
+            {
+                "collect",
+                "--profile",
+                "gc-verbose",
+                "--providers",
+                "Microsoft-DotNETCore-SampleProfiler",
+                "--output",
+                traceFile,
+                "--"
+            };
+            collectArgs.AddRange(command);
+            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+
+            if (!success || !File.Exists(traceFile))
+            {
+                AnsiConsole.MarkupLine($"[red]Trace collection failed:[/] {Markup.Escape(stderr)}");
+                return null;
+            }
+
+            return traceFile;
+        });
+}
+
 CpuProfileResult? CpuProfileCommand(string[] command, string label)
 {
     if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
@@ -289,6 +329,51 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
         using var source = traceLog.Events.GetSource();
 
         const string sampleProfilerProvider = "Microsoft-DotNETCore-SampleProfiler";
+
+        source.Clr.GCAllocationTick += data =>
+        {
+            var bytes = data.AllocationAmount64;
+            if (bytes <= 0)
+            {
+                return;
+            }
+
+            var stack = data.CallStack();
+            if (stack == null)
+            {
+                return;
+            }
+
+            var typeName = string.IsNullOrWhiteSpace(data.TypeName) ? "Unknown" : data.TypeName;
+            var frames = EnumerateCpuFrames(stack).ToList();
+            if (frames.Count == 0)
+            {
+                frames.Add("Unknown");
+            }
+
+            frames.Reverse();
+
+            var node = callTreeRoot;
+            node.AddAllocation(typeName, bytes);
+            foreach (var frame in frames)
+            {
+                if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                {
+                    frameIdx = framesList.Count;
+                    framesList.Add(frame);
+                    frameIndices[frame] = frameIdx;
+                }
+
+                if (!node.Children.TryGetValue(frameIdx, out var child))
+                {
+                    child = new CallTreeNode(frameIdx, frame);
+                    node.Children[frameIdx] = child;
+                }
+
+                child.AddAllocation(typeName, bytes);
+                node = child;
+            }
+        };
 
         source.Dynamic.All += data =>
         {
@@ -441,6 +526,7 @@ void PrintCpuResults(
     var timeUnitLabel = results.TimeUnitLabel;
     var countLabel = results.CountLabel;
     var countSuffix = results.CountSuffix;
+    var allocationTypeLimit = results.CallTreeRoot.AllocationBytes > 0 ? AllocationTypeLimit : 0;
 
     // Top functions overall - using Spectre table
     AnsiConsole.WriteLine();
@@ -532,6 +618,7 @@ void PrintCpuResults(
         callTreeSiblingCutoffPercent,
         timeUnitLabel,
         countSuffix,
+        allocationTypeLimit,
         showTimeline,
         timelineWidth));
     if (showSelfTimeTree)
@@ -547,6 +634,7 @@ void PrintCpuResults(
             callTreeSiblingCutoffPercent,
             timeUnitLabel,
             countSuffix,
+            allocationTypeLimit,
             showTimeline: false)); // Don't show timeline on self-time tree
     }
 }
@@ -2096,7 +2184,8 @@ IRenderable BuildContentionCallTree(
                 maxWidth,
                 siblingCutoffPercent,
                 "ms",
-                "x");
+                "x",
+                0);
         }
     }
 
@@ -2352,6 +2441,7 @@ IRenderable BuildCallTree(
     int siblingCutoffPercent,
     string timeUnitLabel,
     string countSuffix,
+    int allocationTypeLimit,
     bool showTimeline = false,
     int timelineWidth = 40)
 {
@@ -2444,6 +2534,10 @@ IRenderable BuildCallTree(
         Style = new Style(Color.Grey),
         Guide = new CompactTreeGuide()
     };
+    if (allocationTypeLimit > 0)
+    {
+        AddAllocationTypeNodes(tree, rootNode, allocationTypeLimit);
+    }
     var children = CallTreeFilters.GetVisibleChildren(
         rootNode,
         includeRuntime,
@@ -2472,6 +2566,10 @@ IRenderable BuildCallTree(
             isLeaf: isLeaf,
             timeline: null,
             depth: 1));
+        if (allocationTypeLimit > 0)
+        {
+            AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
+        }
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2486,6 +2584,7 @@ IRenderable BuildCallTree(
                 siblingCutoffPercent,
                 timeUnitLabel,
                 countSuffix,
+                allocationTypeLimit,
                 null);
         }
     }
@@ -2633,6 +2732,7 @@ void AddCallTreeChildren(
     int siblingCutoffPercent,
     string timeUnitLabel,
     string countSuffix,
+    int allocationTypeLimit,
     TimelineContext? timeline = null)
 {
     if (depth > maxDepth)
@@ -2673,6 +2773,10 @@ void AddCallTreeChildren(
             isLeaf: isLeaf,
             timeline: timeline,
             depth: depth));
+        if (allocationTypeLimit > 0)
+        {
+            AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
+        }
         if (!isSpecialLeaf)
         {
             AddCallTreeChildren(
@@ -2687,8 +2791,25 @@ void AddCallTreeChildren(
                 siblingCutoffPercent,
                 timeUnitLabel,
                 countSuffix,
+                allocationTypeLimit,
                 timeline);
         }
+    }
+}
+
+void AddAllocationTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)
+{
+    if (limit <= 0 || node.AllocationByType == null || node.AllocationByType.Count == 0)
+    {
+        return;
+    }
+
+    foreach (var entry in node.AllocationByType.OrderByDescending(kv => kv.Value).Take(limit))
+    {
+        var typeName = NameFormatter.FormatTypeDisplayName(entry.Key);
+        var bytesText = FormatBytes(entry.Value);
+        var line = $"[dim]{bytesText}[/] {Markup.Escape(typeName)}";
+        parent.AddNode(line);
     }
 }
 
@@ -3637,12 +3758,24 @@ rootCommand.SetHandler(context =>
         description = resolved.Description;
     }
 
+    string? sharedTraceFile = null;
+    if (!hasInput && runCpu && runMemory)
+    {
+        sharedTraceFile = CollectCpuMemoryTrace(command, label);
+        if (sharedTraceFile == null)
+        {
+            return;
+        }
+    }
+
     if (runCpu)
     {
         Console.WriteLine($"{label} - cpu");
         var results = hasInput
             ? CpuProfileFromInput(inputPath!, label)
-            : CpuProfileCommand(command, label);
+            : sharedTraceFile != null
+                ? AnalyzeCpuTrace(sharedTraceFile)
+                : CpuProfileCommand(command, label);
         PrintCpuResults(
             results,
             label,
@@ -3664,7 +3797,9 @@ rootCommand.SetHandler(context =>
         Console.WriteLine($"{label} - memory");
         var results = hasInput
             ? MemoryProfileFromInput(inputPath!, label)
-            : MemoryProfileCommand(command, label);
+            : sharedTraceFile != null
+                ? MemoryProfileFromInput(sharedTraceFile, label)
+                : MemoryProfileCommand(command, label);
         PrintMemoryResults(
             results,
             label,
