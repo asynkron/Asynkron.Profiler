@@ -3652,6 +3652,28 @@ bool IsFireEmojiCandidate(double hotness, double hotThreshold)
     return hotness >= hotThreshold;
 }
 
+bool TryParseHotThreshold(string? input, out double value)
+{
+    value = HotnessFireThreshold;
+    if (string.IsNullOrWhiteSpace(input))
+    {
+        return true;
+    }
+
+    var trimmed = input.Trim();
+    if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+    {
+        return value is >= 0d and <= 1d;
+    }
+
+    if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.CurrentCulture, out value))
+    {
+        return value is >= 0d and <= 1d;
+    }
+
+    return false;
+}
+
 IReadOnlyList<(string Filter, string DisplayName, double Hotness)> CollectHotMethods(
     CallTreeNode rootNode,
     double totalTime,
@@ -4950,7 +4972,10 @@ var callTreeWidthOption = new Option<int>("--calltree-width", () => 4, "Maximum 
 var callTreeRootModeOption = new Option<string?>("--root-mode", () => "hottest", "Root selection mode when multiple matches (hottest|shallowest|first)");
 var callTreeSelfOption = new Option<bool>("--calltree-self", "Show self-time call tree in addition to total time");
 var callTreeSiblingCutoffOption = new Option<int>("--calltree-sibling-cutoff", () => 5, "Hide siblings below X% of the top sibling (default: 5)");
-var hotThresholdOption = new Option<double>("--hot", () => HotnessFireThreshold, "Hotness threshold for hotspot markers/JIT disasm (0-1)");
+var hotThresholdOption = new Option<string?>(
+    "--hot",
+    () => HotnessFireThreshold.ToString(CultureInfo.InvariantCulture),
+    "Hotness threshold for hotspot markers/JIT disasm (0-1)");
 var functionFilterOption = new Option<string?>("--filter", "Filter CPU function tables by substring (case-insensitive)");
 var exceptionTypeOption = new Option<string?>("--exception-type", "Filter exception tables and call trees by exception type (substring match)");
 var includeRuntimeOption = new Option<bool>("--include-runtime", "Include runtime/process frames in CPU tables and call tree");
@@ -5016,7 +5041,12 @@ rootCommand.SetHandler(context =>
     var callTreeRootMode = context.ParseResult.GetValueForOption(callTreeRootModeOption);
     var callTreeSelf = context.ParseResult.GetValueForOption(callTreeSelfOption);
     var callTreeSiblingCutoff = context.ParseResult.GetValueForOption(callTreeSiblingCutoffOption);
-    var hotThreshold = context.ParseResult.GetValueForOption(hotThresholdOption);
+    var hotThresholdInput = context.ParseResult.GetValueForOption(hotThresholdOption);
+    if (!TryParseHotThreshold(hotThresholdInput, out var hotThreshold))
+    {
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--hot must be a number between 0 and 1 (use 0.3 or 0,3).[/]");
+        return;
+    }
     var functionFilter = context.ParseResult.GetValueForOption(functionFilterOption);
     var exceptionTypeFilter = context.ParseResult.GetValueForOption(exceptionTypeOption);
     var includeRuntime = context.ParseResult.GetValueForOption(includeRuntimeOption);
@@ -5043,11 +5073,6 @@ rootCommand.SetHandler(context =>
         runCpu = true;
     }
 
-    if (hotThreshold is < 0d or > 1d)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--hot must be between 0 and 1.[/]");
-        return;
-    }
 
     var resolver = new ProjectResolver(RunProcess);
     string label;
