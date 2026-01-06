@@ -3652,19 +3652,17 @@ bool IsFireEmojiCandidate(double hotness, double hotThreshold)
     return hotness >= hotThreshold;
 }
 
-record HotMethod(string Filter, string DisplayName, double Hotness);
-
-IReadOnlyList<HotMethod> CollectHotMethods(
+IReadOnlyList<(string Filter, string DisplayName, double Hotness)> CollectHotMethods(
     CallTreeNode rootNode,
     double totalTime,
     double totalSamples,
     bool includeRuntime,
     double hotThreshold)
 {
-    var hotMethods = new Dictionary<string, HotMethod>(StringComparer.OrdinalIgnoreCase);
+    var hotMethods = new Dictionary<string, (string DisplayName, double Hotness)>(StringComparer.OrdinalIgnoreCase);
     if (totalTime <= 0 || totalSamples <= 0)
     {
-        return Array.Empty<HotMethod>();
+        return Array.Empty<(string Filter, string DisplayName, double Hotness)>();
     }
 
     void Visit(CallTreeNode node)
@@ -3681,7 +3679,7 @@ IReadOnlyList<HotMethod> CollectHotMethods(
                     var filterName = node.Name;
                     if (!hotMethods.TryGetValue(filterName, out var existing) || hotness > existing.Hotness)
                     {
-                        hotMethods[filterName] = new HotMethod(filterName, matchName, hotness);
+                        hotMethods[filterName] = (matchName, hotness);
                     }
                 }
             }
@@ -3695,7 +3693,8 @@ IReadOnlyList<HotMethod> CollectHotMethods(
 
     Visit(rootNode);
 
-    return hotMethods.Values
+    return hotMethods
+        .Select(entry => (Filter: entry.Key, DisplayName: entry.Value.DisplayName, Hotness: entry.Value.Hotness))
         .OrderByDescending(entry => entry.Hotness)
         .ThenBy(entry => entry.DisplayName, StringComparer.OrdinalIgnoreCase)
         .ToList();
