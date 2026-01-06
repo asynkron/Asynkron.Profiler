@@ -20,6 +20,7 @@ const int ExceptionTypeLimit = 3;
 const double HotnessFireThreshold = 0.4d;
 const double HotnessColorMin = 0.0d;
 const double HotnessColorMax = 0.4d;
+const double HotnessColorExponent = 0.25d;
 const string HotspotMarker = "\U0001F525";
 var jitNumberRegex = new Regex(
     @"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])",
@@ -111,7 +112,7 @@ string? GetHotnessColor(double hotness)
         return InterpolateColor(cool, hot, 1d);
     }
 
-    var curved = Math.Sqrt(normalizedHotness);
+    var curved = Math.Pow(normalizedHotness, HotnessColorExponent);
     return InterpolateColor(cool, hot, curved);
 }
 
