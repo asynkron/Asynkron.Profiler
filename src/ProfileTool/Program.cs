@@ -2503,6 +2503,7 @@ IRenderable BuildContentionCallTree(
 {
     var callTreeRoot = results.CallTreeRoot;
     var totalTime = results.TotalWaitMs;
+    var totalSamples = callTreeRoot.Calls;
     var title = "Call Tree (Wait Time)";
     maxDepth = Math.Max(1, maxDepth);
     maxWidth = Math.Max(1, maxWidth);
@@ -2528,6 +2529,7 @@ IRenderable BuildContentionCallTree(
     var rootLabel = FormatCallTreeLine(
         rootNode,
         rootTotal,
+        totalSamples,
         useSelfTime: false,
         isRoot: true,
         timeUnitLabel: "ms",
@@ -2558,6 +2560,7 @@ IRenderable BuildContentionCallTree(
         var childNode = tree.AddNode(FormatCallTreeLine(
             child,
             rootTotal,
+            totalSamples,
             useSelfTime: false,
             isRoot: false,
             timeUnitLabel: "ms",
@@ -2569,6 +2572,7 @@ IRenderable BuildContentionCallTree(
                 childNode,
                 child,
                 rootTotal,
+                totalSamples,
                 useSelfTime: false,
                 includeRuntime,
                 2,
@@ -2842,6 +2846,7 @@ IRenderable BuildCallTree(
 {
     var callTreeRoot = results.CallTreeRoot;
     var totalTime = results.CallTreeTotal;
+    var totalSamples = callTreeRoot.Calls;
     var title = useSelfTime ? "Call Tree (Self Time)" : "Call Tree (Total Time)";
     maxDepth = Math.Max(1, maxDepth);
     maxWidth = Math.Max(1, maxWidth);
@@ -2890,6 +2895,7 @@ IRenderable BuildCallTree(
             rows,
             rootNode,
             rootTotal,
+            totalSamples,
             useSelfTime,
             timeUnitLabel,
             countSuffix,
@@ -2919,6 +2925,7 @@ IRenderable BuildCallTree(
     var rootLabel = FormatCallTreeLine(
         rootNode,
         rootTotal,
+        totalSamples,
         useSelfTime,
         isRoot: true,
         timeUnitLabel: timeUnitLabel,
@@ -2963,6 +2970,7 @@ IRenderable BuildCallTree(
         var childNode = tree.AddNode(FormatCallTreeLine(
             child,
             rootTotal,
+            totalSamples,
             useSelfTime,
             isRoot: false,
             timeUnitLabel: timeUnitLabel,
@@ -2986,6 +2994,7 @@ IRenderable BuildCallTree(
                 childNode,
                 child,
                 rootTotal,
+                totalSamples,
                 useSelfTime,
                 includeRuntime,
                 2,
@@ -3010,6 +3019,7 @@ void CollectTimelineRows(
     List<(string TreeText, int VisibleLength, string TimelineBar)> rows,
     CallTreeNode node,
     double totalTime,
+    double totalSamples,
     bool useSelfTime,
     string timeUnitLabel,
     string countSuffix,
@@ -3029,6 +3039,7 @@ void CollectTimelineRows(
     var (treeText, visibleLength) = FormatCallTreeLineSimple(
         node,
         totalTime,
+        totalSamples,
         useSelfTime,
         isRoot,
         timeUnitLabel,
@@ -3071,6 +3082,7 @@ void CollectTimelineRows(
             rows,
             child,
             totalTime,
+            totalSamples,
             useSelfTime,
             timeUnitLabel,
             countSuffix,
@@ -3091,6 +3103,7 @@ void CollectTimelineRows(
 (string Text, int VisibleLength) FormatCallTreeLineSimple(
     CallTreeNode node,
     double totalTime,
+    double totalSamples,
     bool useSelfTime,
     bool isRoot,
     string timeUnitLabel,
@@ -3112,15 +3125,17 @@ void CollectTimelineRows(
         ? GetCallTreeTime(node, useSelfTime: false)
         : GetCallTreeTime(node, useSelfTime);
     var calls = node.Calls;
+    var hotness = ComputeHotness(node, totalTime, totalSamples);
 
     var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
     var timeText = FormatCpuTime(timeSpent, timeUnitLabel);
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
+    var hotnessText = (hotness * 100).ToString("F1", CultureInfo.InvariantCulture);
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var countText = callsText + countSuffix;
 
     // Calculate visible length of prefix + stats.
-    var statsText = $"{timeText} {timeUnitLabel} {pctText}% {countText} ";
+    var statsText = $"{timeText} {timeUnitLabel} {pctText}% H {hotnessText}% {countText} ";
     var statsLength = prefix.Length + statsText.Length;
     var maxNameLength = maxWidth - statsLength - 1; // -1 for trailing space
 
@@ -3140,13 +3155,18 @@ void CollectTimelineRows(
 
     var visibleLength = statsLength + truncatedName.Length;
 
-    return ($"[dim]{Markup.Escape(prefix)}[/][{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}[/] {nameText}", visibleLength);
+    return ($"[dim]{Markup.Escape(prefix)}[/]" +
+            $"[{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] " +
+            $"[{theme.SampleColor}]{pctText}%[/] " +
+            $"[{theme.MemoryValueColor}]H {hotnessText}%[/] " +
+            $"[{theme.CpuCountColor}]{countText}[/] {nameText}", visibleLength);
 }
 
 void AddCallTreeChildren(
     TreeNode parent,
     CallTreeNode node,
     double totalTime,
+    double totalSamples,
     bool useSelfTime,
     bool includeRuntime,
     int depth,
@@ -3192,6 +3212,7 @@ void AddCallTreeChildren(
         var childNode = parent.AddNode(FormatCallTreeLine(
             child,
             totalTime,
+            totalSamples,
             useSelfTime,
             isRoot: false,
             timeUnitLabel: timeUnitLabel,
@@ -3215,6 +3236,7 @@ void AddCallTreeChildren(
                 childNode,
                 child,
                 totalTime,
+                totalSamples,
                 useSelfTime,
                 includeRuntime,
                 depth + 1,
@@ -3322,6 +3344,7 @@ void AddExceptionCallTreeChildren(
 string FormatCallTreeLine(
     CallTreeNode node,
     double totalTime,
+    double totalSamples,
     bool useSelfTime,
     bool isRoot,
     string timeUnitLabel,
@@ -3344,10 +3367,12 @@ string FormatCallTreeLine(
         ? GetCallTreeTime(node, useSelfTime: false)
         : GetCallTreeTime(node, useSelfTime);
     var calls = node.Calls;
+    var hotness = ComputeHotness(node, totalTime, totalSamples);
 
     var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
     var timeText = FormatCpuTime(timeSpent, timeUnitLabel);
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
+    var hotnessText = (hotness * 100).ToString("F1", CultureInfo.InvariantCulture);
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var countText = callsText + countSuffix;
     var nameColor = useHeatColor ? GetHeatGradientColor(timeSpent, totalTime) : null;
@@ -3358,7 +3383,7 @@ string FormatCallTreeLine(
     {
         // Tree guides take ~4 chars per level (can be more with branches: "│  " + "└─ ")
         var treeGuideWidth = depth * 4;
-        var statsText = $"{timeText} {timeUnitLabel} {pctText}% {countText} ";
+        var statsText = $"{timeText} {timeUnitLabel} {pctText}% H {hotnessText}% {countText} ";
         // Available for name = text width - tree guides - stats
         maxNameLen = Math.Max(15, timeline.TextWidth - treeGuideWidth - statsText.Length);
     }
@@ -3374,7 +3399,11 @@ string FormatCallTreeLine(
 
     var nameText = FormatCallTreeName(displayName, matchName, isLeaf, nameColor);
 
-    var baseLine = $"[{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}[/] {nameText}";
+    var baseLine =
+        $"[{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] " +
+        $"[{theme.SampleColor}]{pctText}%[/] " +
+        $"[{theme.MemoryValueColor}]H {hotnessText}%[/] " +
+        $"[{theme.CpuCountColor}]{countText}[/] {nameText}";
 
     // Add timeline bar if enabled
     if (timeline != null && node.HasTiming)
@@ -3547,6 +3576,18 @@ string FormatExceptionCallTreeLine(
 double GetCallTreeTime(CallTreeNode node, bool useSelfTime)
 {
     return useSelfTime ? node.Self : node.Total;
+}
+
+double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
+{
+    if (totalTime <= 0 || totalSamples <= 0)
+    {
+        return 0;
+    }
+
+    var sampleRatio = node.Calls / totalSamples;
+    var selfRatio = node.Self / totalTime;
+    return sampleRatio * selfRatio;
 }
 
 bool IsFireEmojiCandidate(double time, double rootTotal)
