@@ -2,7 +2,8 @@ namespace Asynkron.Profiler;
 
 public class Theme
 {
-    public string TextColor { get; init; } = "white";
+    public string TextColor { get; init; } = "#ffffff";
+    public string HotColor { get; init; } = "#ff5555";
     public string RuntimeTypeColor { get; init; } = "plum1";
     public string CpuValueColor { get; init; } = "green";
     public string CpuCountColor { get; init; } = "blue";
@@ -20,6 +21,7 @@ public class Theme
     public static Theme OneDark => new()
     {
         TextColor = "#abb2bf",
+        HotColor = "#e06c75",
         RuntimeTypeColor = "#c678dd",
         CpuValueColor = "#98c379",
         CpuCountColor = "#61afef",
@@ -34,6 +36,7 @@ public class Theme
     public static Theme Dracula => new()
     {
         TextColor = "#f8f8f2",
+        HotColor = "#ff5555",
         RuntimeTypeColor = "#bd93f9",
         CpuValueColor = "#50fa7b",
         CpuCountColor = "#8be9fd",
@@ -48,6 +51,7 @@ public class Theme
     public static Theme Nord => new()
     {
         TextColor = "#d8dee9",
+        HotColor = "#bf616a",
         RuntimeTypeColor = "#b48ead",
         CpuValueColor = "#a3be8c",
         CpuCountColor = "#88c0d0",
@@ -62,6 +66,7 @@ public class Theme
     public static Theme Monokai => new()
     {
         TextColor = "#f8f8f2",
+        HotColor = "#f92672",
         RuntimeTypeColor = "#ae81ff",
         CpuValueColor = "#a6e22e",
         CpuCountColor = "#66d9ef",

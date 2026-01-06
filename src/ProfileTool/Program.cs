@@ -16,6 +16,9 @@ using Spectre.Console.Rendering;
 
 const int AllocationTypeLimit = 3;
 const int ExceptionTypeLimit = 3;
+const double FireEmojiPercent = 80d;
+const double HeatStartPercent = 20d;
+const string HotspotMarker = "\U0001F525";
 var theme = Theme.Current;
 var treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
 
@@ -43,6 +46,74 @@ Color ParseColor(string hex)
         (byte)((value >> 16) & 0xFF),
         (byte)((value >> 8) & 0xFF),
         (byte)(value & 0xFF));
+}
+
+bool TryParseHexColor(string value, out (byte R, byte G, byte B) rgb)
+{
+    rgb = default;
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    var trimmed = value.Trim();
+    if (trimmed.StartsWith("#", StringComparison.Ordinal))
+    {
+        trimmed = trimmed[1..];
+    }
+
+    if (trimmed.Length != 6)
+    {
+        return false;
+    }
+
+    if (!byte.TryParse(trimmed.AsSpan(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var r) ||
+        !byte.TryParse(trimmed.AsSpan(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var g) ||
+        !byte.TryParse(trimmed.AsSpan(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var b))
+    {
+        return false;
+    }
+
+    rgb = (r, g, b);
+    return true;
+}
+
+string InterpolateColor((byte R, byte G, byte B) start, (byte R, byte G, byte B) end, double t)
+{
+    t = Math.Clamp(t, 0d, 1d);
+    var r = (byte)Math.Round(start.R + (end.R - start.R) * t);
+    var g = (byte)Math.Round(start.G + (end.G - start.G) * t);
+    var b = (byte)Math.Round(start.B + (end.B - start.B) * t);
+    return $"#{r:X2}{g:X2}{b:X2}";
+}
+
+string? GetHeatGradientColor(double timeSpent, double totalTime)
+{
+    if (totalTime <= 0)
+    {
+        return null;
+    }
+
+    if (!TryParseHexColor(theme.TextColor, out var cool) ||
+        !TryParseHexColor(theme.HotColor, out var hot))
+    {
+        return null;
+    }
+
+    var ratio = Math.Clamp(timeSpent / totalTime, 0d, 1d);
+    var start = Math.Clamp(HeatStartPercent / 100d, 0d, 1d);
+    if (start >= 1d)
+    {
+        return InterpolateColor(cool, hot, ratio >= 1d ? 1d : 0d);
+    }
+
+    if (ratio <= start)
+    {
+        return InterpolateColor(cool, hot, 0d);
+    }
+
+    var t = (ratio - start) / (1d - start);
+    return InterpolateColor(cool, hot, t);
 }
 
 bool TryApplyTheme(string? themeName)
@@ -2497,7 +2568,8 @@ IRenderable BuildContentionCallTree(
                 "ms",
                 "x",
                 0,
-                0);
+                0,
+                highlightHotspots: false);
         }
     }
 
@@ -2813,6 +2885,8 @@ IRenderable BuildCallTree(
             countSuffix,
             "",
             true,
+            isHotspot: false,
+            highlightHotspots: true,
             includeRuntime,
             0,
             maxDepth,
@@ -2841,7 +2915,8 @@ IRenderable BuildCallTree(
         countSuffix: countSuffix,
         isLeaf: false,
         timeline: null,
-        depth: 0);
+        depth: 0,
+        useHeatColor: true);
     var tree = new Tree(rootLabel)
     {
         Style = treeGuideStyle,
@@ -2864,6 +2939,8 @@ IRenderable BuildCallTree(
         IsRuntimeNoise);
     foreach (var child in children)
     {
+        var childTime = GetCallTreeTime(child, useSelfTime);
+        var isHotspot = IsFireEmojiCandidate(childTime, rootTotal);
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
                      CallTreeFilters.GetVisibleChildren(
@@ -2882,7 +2959,9 @@ IRenderable BuildCallTree(
             countSuffix: countSuffix,
             isLeaf: isLeaf,
             timeline: null,
-            depth: 1));
+            depth: 1,
+            isHotspot: isHotspot,
+            useHeatColor: true));
         if (allocationTypeLimit > 0)
         {
             AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
@@ -2907,7 +2986,8 @@ IRenderable BuildCallTree(
                 countSuffix,
                 allocationTypeLimit,
                 exceptionTypeLimit,
-                null);
+                highlightHotspots: true,
+                timeline: null);
         }
     }
 
@@ -2925,6 +3005,8 @@ void CollectTimelineRows(
     string countSuffix,
     string prefix,
     bool isRoot,
+    bool isHotspot,
+    bool highlightHotspots,
     bool includeRuntime,
     int depth,
     int maxDepth,
@@ -2942,7 +3024,9 @@ void CollectTimelineRows(
         timeUnitLabel,
         countSuffix,
         prefix,
-        timeline.TextWidth);
+        timeline.TextWidth,
+        isHotspot,
+        useHeatColor: true);
     var timelineBar = RenderTimelineBar(node, timeline);
     rows.Add((treeText, visibleLength, timelineBar));
 
@@ -2961,12 +3045,13 @@ void CollectTimelineRows(
         maxWidth,
         siblingCutoffPercent,
         IsRuntimeNoise);
-
     for (var i = 0; i < children.Count; i++)
     {
         var child = children[i];
         var isLast = i == children.Count - 1;
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
+        var childTime = GetCallTreeTime(child, useSelfTime);
+        var isChildHotspot = highlightHotspots && IsFireEmojiCandidate(childTime, totalTime);
 
         // Build prefix: connector for this node, continuation for its children
         var connector = isLast ? "└─ " : "├─ ";
@@ -2981,6 +3066,8 @@ void CollectTimelineRows(
             countSuffix,
             basePrefix + connector,  // This node's full prefix
             isRoot: false,
+            isHotspot: isChildHotspot,
+            highlightHotspots: highlightHotspots,
             includeRuntime,
             depth + 1,
             isSpecialLeaf ? depth + 1 : maxDepth,
@@ -2999,10 +3086,17 @@ void CollectTimelineRows(
     string timeUnitLabel,
     string countSuffix,
     string prefix,
-    int maxWidth)
+    int maxWidth,
+    bool isHotspot = false,
+    bool useHeatColor = false)
 {
     var matchName = GetCallTreeMatchName(node);
     var displayName = GetCallTreeDisplayName(matchName);
+
+    if (isHotspot)
+    {
+        displayName = $"{HotspotMarker} {displayName}";
+    }
 
     var timeSpent = isRoot && useSelfTime
         ? GetCallTreeTime(node, useSelfTime: false)
@@ -3031,15 +3125,12 @@ void CollectTimelineRows(
         truncatedName = "...";
     }
 
-    var escapedName = Markup.Escape(truncatedName);
-    if (ShouldStopAtLeaf(matchName))
-    {
-        escapedName = $"[{theme.LeafHighlightColor}]{escapedName}[/]";
-    }
+    var nameColor = useHeatColor ? GetHeatGradientColor(timeSpent, totalTime) : null;
+    var nameText = FormatCallTreeName(truncatedName, matchName, ShouldStopAtLeaf(matchName), nameColor);
 
     var visibleLength = statsLength + truncatedName.Length;
 
-    return ($"[dim]{Markup.Escape(prefix)}[/][{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}[/] {escapedName}", visibleLength);
+    return ($"[dim]{Markup.Escape(prefix)}[/][{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}[/] {nameText}", visibleLength);
 }
 
 void AddCallTreeChildren(
@@ -3056,6 +3147,7 @@ void AddCallTreeChildren(
     string countSuffix,
     int allocationTypeLimit,
     int exceptionTypeLimit,
+    bool highlightHotspots = false,
     TimelineContext? timeline = null)
 {
     if (depth > maxDepth)
@@ -3070,7 +3162,6 @@ void AddCallTreeChildren(
         maxWidth,
         siblingCutoffPercent,
         IsRuntimeNoise);
-
     foreach (var child in children)
     {
         var nextDepth = depth + 1;
@@ -3085,6 +3176,8 @@ void AddCallTreeChildren(
                 IsRuntimeNoise)
             : Array.Empty<CallTreeNode>();
         var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
+        var childTime = GetCallTreeTime(child, useSelfTime);
+        var isHotspot = highlightHotspots && IsFireEmojiCandidate(childTime, totalTime);
 
         var childNode = parent.AddNode(FormatCallTreeLine(
             child,
@@ -3095,7 +3188,9 @@ void AddCallTreeChildren(
             countSuffix: countSuffix,
             isLeaf: isLeaf,
             timeline: timeline,
-            depth: depth));
+            depth: depth,
+            isHotspot: isHotspot,
+            useHeatColor: highlightHotspots));
         if (allocationTypeLimit > 0)
         {
             AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
@@ -3120,6 +3215,7 @@ void AddCallTreeChildren(
                 countSuffix,
                 allocationTypeLimit,
                 exceptionTypeLimit,
+                highlightHotspots,
                 timeline);
         }
     }
@@ -3222,10 +3318,17 @@ string FormatCallTreeLine(
     string countSuffix,
     bool isLeaf = false,
     TimelineContext? timeline = null,
-    int depth = 0)
+    int depth = 0,
+    bool isHotspot = false,
+    bool useHeatColor = false)
 {
     var matchName = GetCallTreeMatchName(node);
     var displayName = GetCallTreeDisplayName(matchName);
+
+    if (isHotspot)
+    {
+        displayName = $"{HotspotMarker} {displayName}";
+    }
 
     var timeSpent = isRoot && useSelfTime
         ? GetCallTreeTime(node, useSelfTime: false)
@@ -3237,6 +3340,7 @@ string FormatCallTreeLine(
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var countText = callsText + countSuffix;
+    var nameColor = useHeatColor ? GetHeatGradientColor(timeSpent, totalTime) : null;
 
     // Calculate max name length based on actual depth (shallower = more space)
     int maxNameLen;
@@ -3258,7 +3362,7 @@ string FormatCallTreeLine(
         displayName = displayName[..(maxNameLen - 3)] + "...";
     }
 
-    var nameText = FormatCallTreeName(displayName, matchName, isLeaf);
+    var nameText = FormatCallTreeName(displayName, matchName, isLeaf, nameColor);
 
     var baseLine = $"[{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}[/] {nameText}";
 
@@ -3433,6 +3537,12 @@ string FormatExceptionCallTreeLine(
 double GetCallTreeTime(CallTreeNode node, bool useSelfTime)
 {
     return useSelfTime ? node.Self : node.Total;
+}
+
+bool IsFireEmojiCandidate(double time, double rootTotal)
+{
+    return rootTotal > 0 &&
+           time >= rootTotal * FireEmojiPercent / 100d;
 }
 
 List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
@@ -3641,20 +3751,16 @@ string FormatFunctionDisplayName(string rawName)
     return GetCallTreeDisplayName(formatted);
 }
 
-string FormatCallTreeName(string displayName, string matchName, bool isLeaf)
+string FormatCallTreeName(string displayName, string matchName, bool isLeaf, string? nameColorOverride = null)
 {
     var escaped = Markup.Escape(displayName);
-    if (!isLeaf)
-    {
-        return $"[{theme.TextColor}]{escaped}[/]";
-    }
-
-    if (ShouldStopAtLeaf(matchName))
+    if (isLeaf && ShouldStopAtLeaf(matchName))
     {
         return $"[{theme.LeafHighlightColor}]{escaped}[/]";
     }
 
-    return $"[{theme.TextColor}]{escaped}[/]";
+    var color = string.IsNullOrWhiteSpace(nameColorOverride) ? theme.TextColor : nameColorOverride;
+    return $"[{color}]{escaped}[/]";
 }
 
 string GetCallTreeMatchName(CallTreeNode node)
