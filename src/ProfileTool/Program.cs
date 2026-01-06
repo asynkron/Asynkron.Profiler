@@ -5057,6 +5057,7 @@ rootCommand.SetHandler(context =>
     var callTreeSelf = context.ParseResult.GetValueForOption(callTreeSelfOption);
     var callTreeSiblingCutoff = context.ParseResult.GetValueForOption(callTreeSiblingCutoffOption);
     var hotThresholdInput = context.ParseResult.GetValueForOption(hotThresholdOption);
+    var hotThresholdSpecified = context.ParseResult.FindResultFor(hotThresholdOption) != null;
     if (!TryParseHotThreshold(hotThresholdInput, out var hotThreshold))
     {
         AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--hot must be a number between 0 and 1 (use 0.3 or 0,3).[/]");
@@ -5083,7 +5084,7 @@ rootCommand.SetHandler(context =>
     var runException = exception;
     var runContention = contention;
 
-    if (jitDisasmHot)
+    if (jitDisasmHot || hotThresholdSpecified)
     {
         runCpu = true;
     }
@@ -5179,17 +5180,17 @@ rootCommand.SetHandler(context =>
         return;
     }
 
-    if (jitDisasmHot)
+    if (jitDisasmHot || hotThresholdSpecified)
     {
         if (hasInput)
         {
-            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--jit-disasm-hot requires a command, not --input.[/]");
+            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Hot JIT disasm requires a command, not --input.[/]");
             return;
         }
 
         if (jitInline || jitDisasm)
         {
-            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--jit-disasm-hot cannot be combined with JIT dump modes.[/]");
+            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Hot JIT disasm cannot be combined with JIT dump modes.[/]");
             return;
         }
     }
@@ -5236,7 +5237,7 @@ rootCommand.SetHandler(context =>
                 timeline,
                 timelineWidth,
                 memoryResults: memoryResults);
-            if (jitDisasmHot)
+            if (jitDisasmHot || hotThresholdSpecified)
             {
                 RunHotJitDisasm(cpuResults, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
             }
@@ -5279,7 +5280,7 @@ rootCommand.SetHandler(context =>
                 hotThreshold,
                 timeline,
                 timelineWidth);
-            if (jitDisasmHot && results != null)
+            if ((jitDisasmHot || hotThresholdSpecified) && results != null)
             {
                 RunHotJitDisasm(results, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
             }
