@@ -18,8 +18,8 @@ using Spectre.Console.Rendering;
 const int AllocationTypeLimit = 3;
 const int ExceptionTypeLimit = 3;
 const double HotnessFireThreshold = 0.4d;
-const double HotnessColorMin = 0.1d;
-const double HotnessColorMax = 0.6d;
+const double HotnessColorMin = 0.0d;
+const double HotnessColorMax = 0.4d;
 const string HotspotMarker = "\U0001F525";
 var jitNumberRegex = new Regex(
     @"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])",
@@ -111,7 +111,8 @@ string? GetHotnessColor(double hotness)
         return InterpolateColor(cool, hot, 1d);
     }
 
-    return InterpolateColor(cool, hot, normalizedHotness);
+    var curved = Math.Sqrt(normalizedHotness);
+    return InterpolateColor(cool, hot, curved);
 }
 
 bool TryApplyTheme(string? themeName)
