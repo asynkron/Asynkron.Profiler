@@ -2957,7 +2957,8 @@ IRenderable BuildCallTree(
     foreach (var child in children)
     {
         var childTime = GetCallTreeTime(child, useSelfTime);
-        var isHotspot = IsFireEmojiCandidate(childTime, rootTotal);
+        var childHotness = ComputeHotness(child, rootTotal, totalSamples);
+        var isHotspot = IsFireEmojiCandidate(childHotness);
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
                      CallTreeFilters.GetVisibleChildren(
@@ -3072,7 +3073,8 @@ void CollectTimelineRows(
         var isLast = i == children.Count - 1;
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var childTime = GetCallTreeTime(child, useSelfTime);
-        var isChildHotspot = highlightHotspots && IsFireEmojiCandidate(childTime, totalTime);
+        var childHotness = ComputeHotness(child, totalTime, totalSamples);
+        var isChildHotspot = highlightHotspots && IsFireEmojiCandidate(childHotness);
 
         // Build prefix: connector for this node, continuation for its children
         var connector = isLast ? "└─ " : "├─ ";
@@ -3204,7 +3206,8 @@ void AddCallTreeChildren(
             : Array.Empty<CallTreeNode>();
         var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
         var childTime = GetCallTreeTime(child, useSelfTime);
-        var isHotspot = highlightHotspots && IsFireEmojiCandidate(childTime, totalTime);
+        var childHotness = ComputeHotness(child, totalTime, totalSamples);
+        var isHotspot = highlightHotspots && IsFireEmojiCandidate(childHotness);
 
         var childNode = parent.AddNode(FormatCallTreeLine(
             child,
@@ -3584,10 +3587,9 @@ double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
     return sampleRatio * selfRatio;
 }
 
-bool IsFireEmojiCandidate(double time, double rootTotal)
+bool IsFireEmojiCandidate(double hotness)
 {
-    return rootTotal > 0 &&
-           time >= rootTotal * FireEmojiPercent / 100d;
+    return hotness >= FireEmojiPercent / 100d;
 }
 
 List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
