@@ -91,33 +91,26 @@ string InterpolateColor((byte R, byte G, byte B) start, (byte R, byte G, byte B)
     return $"#{r:X2}{g:X2}{b:X2}";
 }
 
-string? GetHeatGradientColor(double timeSpent, double totalTime)
+string? GetHotnessColor(double hotness)
 {
-    if (totalTime <= 0)
-    {
-        return null;
-    }
-
     if (!TryParseHexColor(theme.TextColor, out var cool) ||
         !TryParseHexColor(theme.HotColor, out var hot))
     {
         return null;
     }
 
-    var ratio = Math.Clamp(timeSpent / totalTime, 0d, 1d);
-    var start = Math.Clamp(HeatStartPercent / 100d, 0d, 1d);
-    if (start >= 1d)
-    {
-        return InterpolateColor(cool, hot, ratio >= 1d ? 1d : 0d);
-    }
-
-    if (ratio <= start)
+    var normalizedHotness = (hotness - 0.1d) / 0.5d;
+    if (normalizedHotness <= 0d)
     {
         return InterpolateColor(cool, hot, 0d);
     }
 
-    var t = (ratio - start) / (1d - start);
-    return InterpolateColor(cool, hot, t);
+    if (normalizedHotness >= 1d)
+    {
+        return InterpolateColor(cool, hot, 1d);
+    }
+
+    return InterpolateColor(cool, hot, normalizedHotness);
 }
 
 bool TryApplyTheme(string? themeName)
@@ -3150,7 +3143,7 @@ void CollectTimelineRows(
     }
 
     var hotness = ComputeHotness(node, totalTime, totalSamples);
-    var nameColor = useHeatColor ? GetHeatGradientColor(hotness, 1d) : null;
+    var nameColor = useHeatColor ? GetHotnessColor(hotness) : null;
     var nameText = FormatCallTreeName(truncatedName, matchName, ShouldStopAtLeaf(matchName), nameColor);
 
     var visibleLength = statsLength + truncatedName.Length;
@@ -3373,7 +3366,7 @@ string FormatCallTreeLine(
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var countText = callsText + countSuffix;
     var hotness = ComputeHotness(node, totalTime, totalSamples);
-    var nameColor = useHeatColor ? GetHeatGradientColor(hotness, 1d) : null;
+    var nameColor = useHeatColor ? GetHotnessColor(hotness) : null;
 
     // Calculate max name length based on actual depth (shallower = more space)
     int maxNameLen;
