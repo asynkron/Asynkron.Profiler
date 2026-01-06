@@ -3125,17 +3125,14 @@ void CollectTimelineRows(
         ? GetCallTreeTime(node, useSelfTime: false)
         : GetCallTreeTime(node, useSelfTime);
     var calls = node.Calls;
-    var hotness = ComputeHotness(node, totalTime, totalSamples);
-
     var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
     var timeText = FormatCpuTime(timeSpent, timeUnitLabel);
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
-    var hotnessText = (hotness * 100).ToString("F1", CultureInfo.InvariantCulture);
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var countText = callsText + countSuffix;
 
     // Calculate visible length of prefix + stats.
-    var statsText = $"{timeText} {timeUnitLabel} {pctText}% H {hotnessText}% {countText} ";
+    var statsText = $"{timeText} {timeUnitLabel} {pctText}% {countText} ";
     var statsLength = prefix.Length + statsText.Length;
     var maxNameLength = maxWidth - statsLength - 1; // -1 for trailing space
 
@@ -3150,7 +3147,8 @@ void CollectTimelineRows(
         truncatedName = "...";
     }
 
-    var nameColor = useHeatColor ? GetHeatGradientColor(timeSpent, totalTime) : null;
+    var hotness = ComputeHotness(node, totalTime, totalSamples);
+    var nameColor = useHeatColor ? GetHeatGradientColor(hotness, 1d) : null;
     var nameText = FormatCallTreeName(truncatedName, matchName, ShouldStopAtLeaf(matchName), nameColor);
 
     var visibleLength = statsLength + truncatedName.Length;
@@ -3158,7 +3156,6 @@ void CollectTimelineRows(
     return ($"[dim]{Markup.Escape(prefix)}[/]" +
             $"[{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] " +
             $"[{theme.SampleColor}]{pctText}%[/] " +
-            $"[{theme.MemoryValueColor}]H {hotnessText}%[/] " +
             $"[{theme.CpuCountColor}]{countText}[/] {nameText}", visibleLength);
 }
 
@@ -3367,15 +3364,13 @@ string FormatCallTreeLine(
         ? GetCallTreeTime(node, useSelfTime: false)
         : GetCallTreeTime(node, useSelfTime);
     var calls = node.Calls;
-    var hotness = ComputeHotness(node, totalTime, totalSamples);
-
     var pct = totalTime > 0 ? 100 * timeSpent / totalTime : 0;
     var timeText = FormatCpuTime(timeSpent, timeUnitLabel);
     var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
-    var hotnessText = (hotness * 100).ToString("F1", CultureInfo.InvariantCulture);
     var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
     var countText = callsText + countSuffix;
-    var nameColor = useHeatColor ? GetHeatGradientColor(timeSpent, totalTime) : null;
+    var hotness = ComputeHotness(node, totalTime, totalSamples);
+    var nameColor = useHeatColor ? GetHeatGradientColor(hotness, 1d) : null;
 
     // Calculate max name length based on actual depth (shallower = more space)
     int maxNameLen;
@@ -3383,7 +3378,7 @@ string FormatCallTreeLine(
     {
         // Tree guides take ~4 chars per level (can be more with branches: "│  " + "└─ ")
         var treeGuideWidth = depth * 4;
-        var statsText = $"{timeText} {timeUnitLabel} {pctText}% H {hotnessText}% {countText} ";
+        var statsText = $"{timeText} {timeUnitLabel} {pctText}% {countText} ";
         // Available for name = text width - tree guides - stats
         maxNameLen = Math.Max(15, timeline.TextWidth - treeGuideWidth - statsText.Length);
     }
@@ -3402,7 +3397,6 @@ string FormatCallTreeLine(
     var baseLine =
         $"[{theme.CpuValueColor}]{timeText} {timeUnitLabel}[/] " +
         $"[{theme.SampleColor}]{pctText}%[/] " +
-        $"[{theme.MemoryValueColor}]H {hotnessText}%[/] " +
         $"[{theme.CpuCountColor}]{countText}[/] {nameText}";
 
     // Add timeline bar if enabled
