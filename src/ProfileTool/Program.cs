@@ -3713,7 +3713,7 @@ IReadOnlyList<(string Filter, string DisplayName, double Hotness)> CollectHotMet
                 var hotness = ComputeHotness(node, totalTime, totalSamples);
                 if (hotness >= hotThreshold)
                 {
-                    var filterName = node.Name;
+                    var filterName = BuildJitMethodFilter(node.Name);
                     if (!hotMethods.TryGetValue(filterName, out var existing) || hotness > existing.Hotness)
                     {
                         hotMethods[filterName] = (matchName, hotness);
@@ -3968,6 +3968,32 @@ string GetCallTreeDisplayName(string matchName)
     }
 
     return matchName;
+}
+
+string BuildJitMethodFilter(string rawName)
+{
+    if (string.IsNullOrWhiteSpace(rawName))
+    {
+        return rawName;
+    }
+
+    var trimmed = rawName.Trim();
+    var paramIndex = trimmed.IndexOf('(');
+    if (paramIndex >= 0)
+    {
+        trimmed = trimmed[..paramIndex];
+    }
+
+    trimmed = trimmed.Trim();
+    trimmed = trimmed.Replace('+', '.');
+
+    var lastDot = trimmed.LastIndexOf('.');
+    if (lastDot > 0 && lastDot < trimmed.Length - 1)
+    {
+        return $"{trimmed[..lastDot]}:{trimmed[(lastDot + 1)..]}";
+    }
+
+    return trimmed;
 }
 
 bool ShouldStopAtLeaf(string matchName)
