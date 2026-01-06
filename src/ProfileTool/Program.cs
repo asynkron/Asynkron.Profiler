@@ -1043,15 +1043,37 @@ void RunHotJitDisasm(
     {
         AnsiConsole.MarkupLine(
             $"[{theme.AccentColor}]Disassembling ({index}/{hotMethods.Count}):[/] {Markup.Escape(method.DisplayName)}");
-        var dumpFiles = JitDisasmCommand(command, method.Filter, outputDir);
+        var dumpFiles = JitDisasmCommand(command, method.Filter, outputDir, suppressNoMarkersWarning: true);
+        var logPath = GetPrimaryJitLogPath(dumpFiles);
+        var hasMarkers = HasJitDisasmMarkers(logPath ?? string.Empty);
+
+        var fallbackFilter = method.Filter;
+        var separatorIndex = fallbackFilter.LastIndexOf(':');
+        if (separatorIndex >= 0 && separatorIndex < fallbackFilter.Length - 1)
+        {
+            fallbackFilter = fallbackFilter[(separatorIndex + 1)..];
+        }
+
+        if (!hasMarkers && !string.Equals(fallbackFilter, method.Filter, StringComparison.Ordinal))
+        {
+            AnsiConsole.MarkupLine($"[{theme.AccentColor}]Retrying with filter:[/] {Markup.Escape(fallbackFilter)}");
+            dumpFiles = JitDisasmCommand(command, fallbackFilter, outputDir, suppressNoMarkersWarning: true);
+            logPath = GetPrimaryJitLogPath(dumpFiles);
+            hasMarkers = HasJitDisasmMarkers(logPath ?? string.Empty);
+        }
+
+        if (!hasMarkers)
+        {
+            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No JIT disassembly markers found. Check the method filter.[/]");
+        }
+
         AnsiConsole.MarkupLine($"[{theme.AccentColor}]JIT disasm files:[/]");
         foreach (var file in dumpFiles)
         {
             Console.WriteLine(file);
         }
 
-        var logPath = GetPrimaryJitLogPath(dumpFiles);
-        if (!string.IsNullOrWhiteSpace(logPath))
+        if (hasMarkers && !string.IsNullOrWhiteSpace(logPath))
         {
             PrintJitDisasmSummary(logPath);
         }
@@ -4287,7 +4309,7 @@ string[] JitInlineDumpCommand(
     return results.ToArray();
 }
 
-string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir)
+string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir, bool suppressNoMarkersWarning = false)
 {
     if (command.Length == 0)
     {
@@ -4369,9 +4391,8 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir)
         AnsiConsole.MarkupLine($"[{theme.ErrorColor}]JIT disasm process exited with code {proc.ExitCode}.[/]");
     }
 
-    var hasDisasmMarkers = File.ReadLines(stdoutFile)
-        .Any(line => line.StartsWith("; Assembly listing for method", StringComparison.Ordinal));
-    if (!hasDisasmMarkers)
+    var hasDisasmMarkers = HasJitDisasmMarkers(stdoutFile);
+    if (!hasDisasmMarkers && !suppressNoMarkersWarning)
     {
         AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No JIT disassembly markers found. Check the method filter.[/]");
     }
@@ -4388,6 +4409,17 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir)
     }
 
     return results.ToArray();
+}
+
+bool HasJitDisasmMarkers(string logPath)
+{
+    if (string.IsNullOrWhiteSpace(logPath) || !File.Exists(logPath))
+    {
+        return false;
+    }
+
+    return File.ReadLines(logPath)
+        .Any(line => line.StartsWith("; Assembly listing for method", StringComparison.Ordinal));
 }
 
 string? GetPrimaryJitLogPath(IEnumerable<string> files)
