@@ -17,8 +17,9 @@ using Spectre.Console.Rendering;
 
 const int AllocationTypeLimit = 3;
 const int ExceptionTypeLimit = 3;
-const double FireEmojiPercent = 80d;
-const double HeatStartPercent = 20d;
+const double HotnessFireThreshold = 0.4d;
+const double HotnessColorMin = 0.1d;
+const double HotnessColorMax = 0.6d;
 const string HotspotMarker = "\U0001F525";
 var jitNumberRegex = new Regex(
     @"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])",
@@ -99,7 +100,7 @@ string? GetHotnessColor(double hotness)
         return null;
     }
 
-    var normalizedHotness = (hotness - 0.1d) / 0.5d;
+    var normalizedHotness = (hotness - HotnessColorMin) / (HotnessColorMax - HotnessColorMin);
     if (normalizedHotness <= 0d)
     {
         return InterpolateColor(cool, hot, 0d);
@@ -812,6 +813,7 @@ void PrintCpuResults(
     string? callTreeRootMode,
     bool showSelfTimeTree,
     int callTreeSiblingCutoffPercent,
+    double hotThreshold,
     bool showTimeline = false,
     int timelineWidth = 40,
     MemoryProfileResult? memoryResults = null)
@@ -952,26 +954,9 @@ void PrintCpuResults(
         summaryRows,
         hideHeaders: true);
 
-    AnsiConsole.Write(BuildCallTree(
-        results,
-        useSelfTime: false,
-        resolvedRoot,
-        includeRuntime,
-        callTreeDepth,
-        callTreeWidth,
-        callTreeRootMode,
-        callTreeSiblingCutoffPercent,
-        timeUnitLabel,
-        countSuffix,
-        allocationTypeLimit,
-        exceptionTypeLimit,
-        showTimeline,
-        timelineWidth));
-    if (showSelfTimeTree)
-    {
         AnsiConsole.Write(BuildCallTree(
             results,
-            useSelfTime: true,
+            useSelfTime: false,
             resolvedRoot,
             includeRuntime,
             callTreeDepth,
@@ -982,7 +967,81 @@ void PrintCpuResults(
             countSuffix,
             allocationTypeLimit,
             exceptionTypeLimit,
-            showTimeline: false)); // Don't show timeline on self-time tree
+            hotThreshold,
+            showTimeline,
+            timelineWidth));
+        if (showSelfTimeTree)
+        {
+            AnsiConsole.Write(BuildCallTree(
+                results,
+                useSelfTime: true,
+                resolvedRoot,
+                includeRuntime,
+                callTreeDepth,
+                callTreeWidth,
+                callTreeRootMode,
+                callTreeSiblingCutoffPercent,
+                timeUnitLabel,
+                countSuffix,
+                allocationTypeLimit,
+                exceptionTypeLimit,
+                hotThreshold,
+                showTimeline: false)); // Don't show timeline on self-time tree
+        }
+}
+
+void RunHotJitDisasm(
+    CpuProfileResult results,
+    string[] command,
+    string? rootFilter,
+    string? rootMode,
+    bool includeRuntime,
+    double hotThreshold)
+{
+    var rootNode = results.CallTreeRoot;
+    var totalTime = results.CallTreeTotal;
+    var totalSamples = rootNode.Calls;
+    var title = $"JIT DISASM (HOT METHODS >= {hotThreshold.ToString("F1", CultureInfo.InvariantCulture)})";
+
+    if (!string.IsNullOrWhiteSpace(rootFilter))
+    {
+        var matches = FindCallTreeMatches(rootNode, rootFilter);
+        if (matches.Count > 0)
+        {
+            rootNode = SelectRootMatch(matches, includeRuntime, rootMode);
+            totalTime = GetCallTreeTime(rootNode, useSelfTime: false);
+            totalSamples = rootNode.Calls;
+            title = $"{title} - root: {Markup.Escape(rootFilter)}";
+        }
+    }
+
+    var hotMethods = CollectHotMethods(rootNode, totalTime, totalSamples, includeRuntime, hotThreshold);
+    PrintSection(title, theme.AccentColor);
+    if (hotMethods.Count == 0)
+    {
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]No hot methods found.[/]");
+        return;
+    }
+
+    var index = 1;
+    foreach (var method in hotMethods)
+    {
+        AnsiConsole.MarkupLine(
+            $"[{theme.AccentColor}]Disassembling ({index}/{hotMethods.Count}):[/] {Markup.Escape(method.DisplayName)}");
+        var dumpFiles = JitDisasmCommand(command, method.Filter, outputDir);
+        AnsiConsole.MarkupLine($"[{theme.AccentColor}]JIT disasm files:[/]");
+        foreach (var file in dumpFiles)
+        {
+            Console.WriteLine(file);
+        }
+
+        var logPath = GetPrimaryJitLogPath(dumpFiles);
+        if (!string.IsNullOrWhiteSpace(logPath))
+        {
+            PrintJitDisasmSummary(logPath);
+        }
+
+        index++;
     }
 }
 
@@ -2576,6 +2635,7 @@ IRenderable BuildContentionCallTree(
                 "x",
                 0,
                 0,
+                HotnessFireThreshold,
                 highlightHotspots: false);
         }
     }
@@ -2834,6 +2894,7 @@ IRenderable BuildCallTree(
     string countSuffix,
     int allocationTypeLimit,
     int exceptionTypeLimit,
+    double hotThreshold,
     bool showTimeline = false,
     int timelineWidth = 40)
 {
@@ -2901,6 +2962,7 @@ IRenderable BuildCallTree(
             maxDepth,
             maxWidth,
             siblingCutoffPercent,
+            hotThreshold,
             timeline);
 
         // Build combined output - each row is tree + padding + timeline on one line
@@ -2951,7 +3013,7 @@ IRenderable BuildCallTree(
     {
         var childTime = GetCallTreeTime(child, useSelfTime);
         var childHotness = ComputeHotness(child, rootTotal, totalSamples);
-        var isHotspot = IsFireEmojiCandidate(childHotness);
+        var isHotspot = IsFireEmojiCandidate(childHotness, hotThreshold);
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
                      CallTreeFilters.GetVisibleChildren(
@@ -2999,6 +3061,7 @@ IRenderable BuildCallTree(
                 countSuffix,
                 allocationTypeLimit,
                 exceptionTypeLimit,
+                hotThreshold,
                 highlightHotspots: true,
                 timeline: null);
         }
@@ -3026,6 +3089,7 @@ void CollectTimelineRows(
     int maxDepth,
     int maxWidth,
     int siblingCutoffPercent,
+    double hotThreshold,
     TimelineContext timeline,
     string? continuationPrefix = null)
 {
@@ -3067,7 +3131,7 @@ void CollectTimelineRows(
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var childTime = GetCallTreeTime(child, useSelfTime);
         var childHotness = ComputeHotness(child, totalTime, totalSamples);
-        var isChildHotspot = highlightHotspots && IsFireEmojiCandidate(childHotness);
+        var isChildHotspot = highlightHotspots && IsFireEmojiCandidate(childHotness, hotThreshold);
 
         // Build prefix: connector for this node, continuation for its children
         var connector = isLast ? "└─ " : "├─ ";
@@ -3090,6 +3154,7 @@ void CollectTimelineRows(
             isSpecialLeaf ? depth + 1 : maxDepth,
             maxWidth,
             siblingCutoffPercent,
+            hotThreshold,
             timeline,
             basePrefix + continuation);  // Continuation prefix for grandchildren
     }
@@ -3169,6 +3234,7 @@ void AddCallTreeChildren(
     string countSuffix,
     int allocationTypeLimit,
     int exceptionTypeLimit,
+    double hotThreshold,
     bool highlightHotspots = false,
     TimelineContext? timeline = null)
 {
@@ -3200,7 +3266,7 @@ void AddCallTreeChildren(
         var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
         var childTime = GetCallTreeTime(child, useSelfTime);
         var childHotness = ComputeHotness(child, totalTime, totalSamples);
-        var isHotspot = highlightHotspots && IsFireEmojiCandidate(childHotness);
+        var isHotspot = highlightHotspots && IsFireEmojiCandidate(childHotness, hotThreshold);
 
         var childNode = parent.AddNode(FormatCallTreeLine(
             child,
@@ -3240,6 +3306,7 @@ void AddCallTreeChildren(
                 countSuffix,
                 allocationTypeLimit,
                 exceptionTypeLimit,
+                hotThreshold,
                 highlightHotspots,
                 timeline);
         }
@@ -3580,9 +3647,58 @@ double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
     return sampleRatio * selfRatio;
 }
 
-bool IsFireEmojiCandidate(double hotness)
+bool IsFireEmojiCandidate(double hotness, double hotThreshold)
 {
-    return hotness >= 0.4d;
+    return hotness >= hotThreshold;
+}
+
+record HotMethod(string Filter, string DisplayName, double Hotness);
+
+IReadOnlyList<HotMethod> CollectHotMethods(
+    CallTreeNode rootNode,
+    double totalTime,
+    double totalSamples,
+    bool includeRuntime,
+    double hotThreshold)
+{
+    var hotMethods = new Dictionary<string, HotMethod>(StringComparer.OrdinalIgnoreCase);
+    if (totalTime <= 0 || totalSamples <= 0)
+    {
+        return Array.Empty<HotMethod>();
+    }
+
+    void Visit(CallTreeNode node)
+    {
+        if (node.FrameIdx >= 0 &&
+            (includeRuntime || !IsRuntimeNoise(node.Name)))
+        {
+            var matchName = GetCallTreeMatchName(node);
+            if (!IsUnmanagedFrame(matchName))
+            {
+                var hotness = ComputeHotness(node, totalTime, totalSamples);
+                if (hotness >= hotThreshold)
+                {
+                    var filterName = node.Name;
+                    if (!hotMethods.TryGetValue(filterName, out var existing) || hotness > existing.Hotness)
+                    {
+                        hotMethods[filterName] = new HotMethod(filterName, matchName, hotness);
+                    }
+                }
+            }
+        }
+
+        foreach (var child in node.Children.Values)
+        {
+            Visit(child);
+        }
+    }
+
+    Visit(rootNode);
+
+    return hotMethods.Values
+        .OrderByDescending(entry => entry.Hotness)
+        .ThenBy(entry => entry.DisplayName, StringComparer.OrdinalIgnoreCase)
+        .ToList();
 }
 
 List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
@@ -4825,6 +4941,7 @@ var contentionOption = new Option<bool>("--contention", "Run lock contention pro
 var heapOption = new Option<bool>("--heap", "Capture heap snapshot");
 var jitInlineOption = new Option<bool>("--jit-inline", "Capture JIT inlining dumps to files (no parsing)");
 var jitDisasmOption = new Option<bool>("--jit-disasm", "Capture JIT disassembly output to files (no parsing)");
+var jitDisasmHotOption = new Option<bool>("--jit-disasm-hot", "Capture JIT disassembly for hot methods after CPU profiling");
 var jitMethodOption = new Option<string?>("--jit-method", "Method filter for JIT dumps (e.g. Namespace.Type:Method)");
 var jitAltJitPathOption = new Option<string?>("--jit-altjit-path", "Path to a Debug/Checked JIT (libclrjit) for JitDump");
 var jitAltJitNameOption = new Option<string?>("--jit-altjit-name", () => "clrjit", "AltJit name (default: clrjit)");
@@ -4834,6 +4951,7 @@ var callTreeWidthOption = new Option<int>("--calltree-width", () => 4, "Maximum 
 var callTreeRootModeOption = new Option<string?>("--root-mode", () => "hottest", "Root selection mode when multiple matches (hottest|shallowest|first)");
 var callTreeSelfOption = new Option<bool>("--calltree-self", "Show self-time call tree in addition to total time");
 var callTreeSiblingCutoffOption = new Option<int>("--calltree-sibling-cutoff", () => 5, "Hide siblings below X% of the top sibling (default: 5)");
+var hotThresholdOption = new Option<double>("--hot", () => HotnessFireThreshold, "Hotness threshold for hotspot markers/JIT disasm (0-1)");
 var functionFilterOption = new Option<string?>("--filter", "Filter CPU function tables by substring (case-insensitive)");
 var exceptionTypeOption = new Option<string?>("--exception-type", "Filter exception tables and call trees by exception type (substring match)");
 var includeRuntimeOption = new Option<bool>("--include-runtime", "Include runtime/process frames in CPU tables and call tree");
@@ -4856,6 +4974,7 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Cont
     heapOption,
     jitInlineOption,
     jitDisasmOption,
+    jitDisasmHotOption,
     jitMethodOption,
     jitAltJitPathOption,
     jitAltJitNameOption,
@@ -4865,6 +4984,7 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Cont
     callTreeRootModeOption,
     callTreeSelfOption,
     callTreeSiblingCutoffOption,
+    hotThresholdOption,
     functionFilterOption,
     exceptionTypeOption,
     includeRuntimeOption,
@@ -4887,6 +5007,7 @@ rootCommand.SetHandler(context =>
     var heap = context.ParseResult.GetValueForOption(heapOption);
     var jitInline = context.ParseResult.GetValueForOption(jitInlineOption);
     var jitDisasm = context.ParseResult.GetValueForOption(jitDisasmOption);
+    var jitDisasmHot = context.ParseResult.GetValueForOption(jitDisasmHotOption);
     var jitMethod = context.ParseResult.GetValueForOption(jitMethodOption);
     var jitAltJitPath = context.ParseResult.GetValueForOption(jitAltJitPathOption);
     var jitAltJitName = context.ParseResult.GetValueForOption(jitAltJitNameOption);
@@ -4896,6 +5017,7 @@ rootCommand.SetHandler(context =>
     var callTreeRootMode = context.ParseResult.GetValueForOption(callTreeRootModeOption);
     var callTreeSelf = context.ParseResult.GetValueForOption(callTreeSelfOption);
     var callTreeSiblingCutoff = context.ParseResult.GetValueForOption(callTreeSiblingCutoffOption);
+    var hotThreshold = context.ParseResult.GetValueForOption(hotThresholdOption);
     var functionFilter = context.ParseResult.GetValueForOption(functionFilterOption);
     var exceptionTypeFilter = context.ParseResult.GetValueForOption(exceptionTypeOption);
     var includeRuntime = context.ParseResult.GetValueForOption(includeRuntimeOption);
@@ -4916,6 +5038,17 @@ rootCommand.SetHandler(context =>
     var runHeap = heap;
     var runException = exception;
     var runContention = contention;
+
+    if (jitDisasmHot)
+    {
+        runCpu = true;
+    }
+
+    if (hotThreshold is < 0d or > 1d)
+    {
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--hot must be between 0 and 1.[/]");
+        return;
+    }
 
     var resolver = new ProjectResolver(RunProcess);
     string label;
@@ -5007,6 +5140,21 @@ rootCommand.SetHandler(context =>
         return;
     }
 
+    if (jitDisasmHot)
+    {
+        if (hasInput)
+        {
+            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--jit-disasm-hot requires a command, not --input.[/]");
+            return;
+        }
+
+        if (jitInline || jitDisasm)
+        {
+            AnsiConsole.MarkupLine($"[{theme.ErrorColor}]--jit-disasm-hot cannot be combined with JIT dump modes.[/]");
+            return;
+        }
+    }
+
     string? sharedTraceFile = null;
     if (!hasInput && runCpu && (runMemory || runException))
     {
@@ -5045,9 +5193,14 @@ rootCommand.SetHandler(context =>
                 callTreeRootMode,
                 callTreeSelf,
                 callTreeSiblingCutoff,
+                hotThreshold,
                 timeline,
                 timelineWidth,
                 memoryResults: memoryResults);
+            if (jitDisasmHot)
+            {
+                RunHotJitDisasm(cpuResults, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
+            }
         }
         else if (memoryResults != null)
         {
@@ -5084,8 +5237,13 @@ rootCommand.SetHandler(context =>
                 callTreeRootMode,
                 callTreeSelf,
                 callTreeSiblingCutoff,
+                hotThreshold,
                 timeline,
                 timelineWidth);
+            if (jitDisasmHot && results != null)
+            {
+                RunHotJitDisasm(results, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
+            }
         }
 
         if (runMemory)
