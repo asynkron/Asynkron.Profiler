@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Asynkron.Profiler;
 using Microsoft.Diagnostics.Tracing;
@@ -19,6 +20,9 @@ const int ExceptionTypeLimit = 3;
 const double FireEmojiPercent = 80d;
 const double HeatStartPercent = 20d;
 const string HotspotMarker = "\U0001F525";
+var jitNumberRegex = new Regex(
+    @"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])",
+    RegexOptions.Compiled);
 var theme = Theme.Current;
 var treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
 
@@ -4086,6 +4090,7 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir)
     var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
     var stdoutFile = Path.Combine(outputDir, $"jitdisasm_{timestamp}.log");
     var stderrFile = Path.Combine(outputDir, $"jitdisasm_{timestamp}.err.log");
+    var colorFile = Path.Combine(outputDir, $"jitdisasm_{timestamp}.color.log");
 
     AnsiConsole.MarkupLine($"[dim]Capturing JIT disassembly for {Markup.Escape(jitMethod)}...[/]");
 
@@ -4122,8 +4127,10 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir)
 
     using var stdoutWriter = new StreamWriter(stdoutFile, append: false, Encoding.UTF8);
     using var stderrWriter = new StreamWriter(stderrFile, append: false, Encoding.UTF8);
+    using var colorWriter = new StreamWriter(colorFile, append: false, Encoding.UTF8);
     stdoutWriter.AutoFlush = true;
     stderrWriter.AutoFlush = true;
+    colorWriter.AutoFlush = true;
 
     proc.OutputDataReceived += (_, e) =>
     {
@@ -4133,6 +4140,7 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir)
         }
 
         stdoutWriter.WriteLine(e.Data);
+        colorWriter.WriteLine(ColorizeJitDisasmLine(e.Data));
     };
     proc.ErrorDataReceived += (_, e) =>
     {
@@ -4162,7 +4170,8 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir)
 
     var results = new List<string>
     {
-        Path.GetFullPath(stdoutFile)
+        Path.GetFullPath(stdoutFile),
+        Path.GetFullPath(colorFile)
     };
 
     if (new FileInfo(stderrFile).Length > 0)
@@ -4189,6 +4198,159 @@ string? GetPrimaryJitLogPath(IEnumerable<string> files)
     }
 
     return null;
+}
+
+string ColorizeJitDisasmLine(string line)
+{
+    if (line.Length == 0)
+    {
+        return line;
+    }
+
+    var commentColor = AnsiColor(theme.TreeGuideColor, dim: true);
+    var labelColor = AnsiColor(theme.CpuCountColor);
+    var mnemonicColor = AnsiColor(theme.TextColor);
+    var numberColor = AnsiColor(theme.LeafHighlightColor);
+
+    if (line.StartsWith(";", StringComparison.Ordinal))
+    {
+        return WrapAnsi(line, commentColor);
+    }
+
+    var trimmed = line.TrimStart();
+    var indent = line[..(line.Length - trimmed.Length)];
+    if (trimmed.StartsWith("Runs=", StringComparison.Ordinal) ||
+        trimmed.StartsWith("Done in", StringComparison.Ordinal))
+    {
+        return WrapAnsi(line, commentColor);
+    }
+
+    var commentIndex = trimmed.IndexOf(";;", StringComparison.Ordinal);
+    var leading = commentIndex >= 0 ? trimmed[..commentIndex] : trimmed;
+    var trailing = commentIndex >= 0 ? trimmed[commentIndex..] : string.Empty;
+
+    var labelIndex = leading.IndexOf(':');
+    if (labelIndex > 0 && IsLabelToken(leading[..labelIndex]))
+    {
+        var label = leading[..(labelIndex + 1)];
+        var rest = leading[(labelIndex + 1)..];
+        var restColored = ColorizeInstructionSegment(rest, mnemonicColor, numberColor);
+        var highlighted = $"{WrapAnsi(label, labelColor)}{restColored}";
+        if (trailing.Length > 0)
+        {
+            highlighted += WrapAnsi(trailing, commentColor);
+        }
+
+        return $"{indent}{highlighted}";
+    }
+
+    var instructionColored = ColorizeInstructionSegment(leading, mnemonicColor, numberColor);
+    if (trailing.Length > 0)
+    {
+        instructionColored += WrapAnsi(trailing, commentColor);
+    }
+
+    return $"{indent}{instructionColored}";
+}
+
+string ColorizeInstructionSegment(string value, string mnemonicColor, string numberColor)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return value;
+    }
+
+    var trimmed = value.TrimStart();
+    var indent = value[..(value.Length - trimmed.Length)];
+    var mnemonicEnd = 0;
+    while (mnemonicEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[mnemonicEnd]))
+    {
+        mnemonicEnd++;
+    }
+
+    if (mnemonicEnd == 0)
+    {
+        return value;
+    }
+
+    var mnemonic = trimmed[..mnemonicEnd];
+    var rest = trimmed[mnemonicEnd..];
+    var restColored = ColorizeNumbers(rest, numberColor);
+    return $"{indent}{WrapAnsi(mnemonic, mnemonicColor)}{restColored}";
+}
+
+string ColorizeNumbers(string text, string color)
+{
+    if (string.IsNullOrEmpty(color))
+    {
+        return text;
+    }
+
+    return jitNumberRegex.Replace(text, match => WrapAnsi(match.Value, color));
+}
+
+bool IsLabelToken(string value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    foreach (var ch in value)
+    {
+        if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '$')
+        {
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+string AnsiColor(string hex, bool dim = false)
+{
+    if (!TryResolveRgb(hex, out var rgb))
+    {
+        return string.Empty;
+    }
+
+    var dimPrefix = dim ? "\u001b[2m" : string.Empty;
+    return $"{dimPrefix}\u001b[38;2;{rgb.R};{rgb.G};{rgb.B}m";
+}
+
+bool TryResolveRgb(string value, out (byte R, byte G, byte B) rgb)
+{
+    if (TryParseHexColor(value, out rgb))
+    {
+        return true;
+    }
+
+    var normalized = value?.Trim().ToLowerInvariant();
+    rgb = normalized switch
+    {
+        "yellow" => (255, 255, 0),
+        "red" => (255, 0, 0),
+        "green" => (0, 255, 0),
+        "blue" => (0, 0, 255),
+        "cyan" => (0, 255, 255),
+        "plum1" => (255, 187, 255),
+        _ => default
+    };
+
+    return rgb != default;
+}
+
+string WrapAnsi(string text, string color)
+{
+    if (string.IsNullOrEmpty(color))
+    {
+        return text;
+    }
+
+    const string Reset = "\u001b[0m";
+    return $"{color}{text}{Reset}";
 }
 
 void PrintJitDisasmSummary(string logPath)
@@ -4376,6 +4538,12 @@ void PrintJitDisasmSummary(string logPath)
         PrintSummaryLine(
             "Instructions:",
             instructionCount.Value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    if (logPath.EndsWith(".color.log", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.WriteLine();
+        PrintSummaryLine("To browse the assembly, run:", $"less {logPath}");
     }
 }
 
