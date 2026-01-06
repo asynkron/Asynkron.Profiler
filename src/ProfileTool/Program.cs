@@ -18,9 +18,9 @@ using Spectre.Console.Rendering;
 const int AllocationTypeLimit = 3;
 const int ExceptionTypeLimit = 3;
 const double HotnessFireThreshold = 0.4d;
-const double HotnessColorMin = 0.0d;
+const double HotnessColorFloor = 0.001d;
+const double HotnessColorMid = 0.0025d;
 const double HotnessColorMax = 0.4d;
-const double HotnessColorExponent = 0.25d;
 const string HotspotMarker = "\U0001F525";
 var jitNumberRegex = new Regex(
     @"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])",
@@ -101,19 +101,32 @@ string? GetHotnessColor(double hotness)
         return null;
     }
 
-    var normalizedHotness = (hotness - HotnessColorMin) / (HotnessColorMax - HotnessColorMin);
-    if (normalizedHotness <= 0d)
+    double normalizedHotness;
+    if (hotness <= HotnessColorFloor)
     {
-        return InterpolateColor(cool, hot, 0d);
+        normalizedHotness = 0d;
+    }
+    else if (hotness <= HotnessColorMid)
+    {
+        var span = HotnessColorMid - HotnessColorFloor;
+        normalizedHotness = span > 0d
+            ? (hotness - HotnessColorFloor) / span * 0.5d
+            : 0d;
+    }
+    else if (hotness >= HotnessColorMax)
+    {
+        normalizedHotness = 1d;
+    }
+    else
+    {
+        var span = HotnessColorMax - HotnessColorMid;
+        normalizedHotness = span > 0d
+            ? 0.5d + (hotness - HotnessColorMid) / span * 0.5d
+            : 1d;
     }
 
-    if (normalizedHotness >= 1d)
-    {
-        return InterpolateColor(cool, hot, 1d);
-    }
-
-    var curved = Math.Pow(normalizedHotness, HotnessColorExponent);
-    return InterpolateColor(cool, hot, curved);
+    normalizedHotness = Math.Clamp(normalizedHotness, 0d, 1d);
+    return InterpolateColor(cool, hot, normalizedHotness);
 }
 
 bool TryApplyTheme(string? themeName)
