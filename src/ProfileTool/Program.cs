@@ -3589,7 +3589,7 @@ double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
 
 bool IsFireEmojiCandidate(double hotness)
 {
-    return hotness >= FireEmojiPercent / 100d;
+    return hotness >= 0.4d;
 }
 
 List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
