@@ -5036,6 +5036,7 @@ var heapOption = new Option<bool>("--heap", "Capture heap snapshot");
 var jitInlineOption = new Option<bool>("--jit-inline", "Capture JIT inlining dumps to files (no parsing)");
 var jitDisasmOption = new Option<bool>("--jit-disasm", "Capture JIT disassembly output to files (no parsing)");
 var jitDisasmHotOption = new Option<bool>("--jit-disasm-hot", "Capture JIT disassembly for hot methods after CPU profiling");
+var jitOption = new Option<bool>("--jit", "Enable JIT decompilation for hot methods (requires --hot)");
 var jitMethodOption = new Option<string?>("--jit-method", "Method filter for JIT dumps (e.g. Namespace.Type:Method)");
 var jitAltJitPathOption = new Option<string?>("--jit-altjit-path", "Path to a Debug/Checked JIT (libclrjit) for JitDump");
 var jitAltJitNameOption = new Option<string?>("--jit-altjit-name", () => "clrjit", "AltJit name (default: clrjit)");
@@ -5072,6 +5073,7 @@ var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Cont
     jitInlineOption,
     jitDisasmOption,
     jitDisasmHotOption,
+    jitOption,
     jitMethodOption,
     jitAltJitPathOption,
     jitAltJitNameOption,
@@ -5105,6 +5107,7 @@ rootCommand.SetHandler(context =>
     var jitInline = context.ParseResult.GetValueForOption(jitInlineOption);
     var jitDisasm = context.ParseResult.GetValueForOption(jitDisasmOption);
     var jitDisasmHot = context.ParseResult.GetValueForOption(jitDisasmHotOption);
+    var jit = context.ParseResult.GetValueForOption(jitOption);
     var jitMethod = context.ParseResult.GetValueForOption(jitMethodOption);
     var jitAltJitPath = context.ParseResult.GetValueForOption(jitAltJitPathOption);
     var jitAltJitName = context.ParseResult.GetValueForOption(jitAltJitNameOption);
@@ -5295,7 +5298,7 @@ rootCommand.SetHandler(context =>
                 timeline,
                 timelineWidth,
                 memoryResults: memoryResults);
-            if (jitDisasmHot || hotThresholdSpecified)
+            if ((jitDisasmHot || hotThresholdSpecified) && jit)
             {
                 RunHotJitDisasm(cpuResults, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
             }
@@ -5338,7 +5341,7 @@ rootCommand.SetHandler(context =>
                 hotThreshold,
                 timeline,
                 timelineWidth);
-            if ((jitDisasmHot || hotThresholdSpecified) && results != null)
+            if ((jitDisasmHot || hotThresholdSpecified) && jit && results != null)
             {
                 RunHotJitDisasm(results, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
             }
