@@ -1,3 +1,7 @@
+[![CI](https://github.com/asynkron/Asynkron.Profiler/actions/workflows/ci.yml
+ci.yml/badge.svg)](https://github.com/asynkron/Asynkron.Profiler/actions/workflows/ci.yml
+ci.yml)
+
 <img src="assets/images/logo.png" alt="Asynkron Profiler" width="100%" />
 
 # Asynkron.Profiler
