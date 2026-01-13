@@ -24,6 +24,12 @@
 
   <ItemGroup>
     <Compile Remove="Theme.cs" />
+    <Compile Remove="Cpu\**\*.cs" />
+    <Compile Remove="Memory\**\*.cs" />
+    <Compile Remove="Exceptions\**\*.cs" />
+    <Compile Remove="Contention\**\*.cs" />
+    <Compile Remove="Heap\**\*.cs" />
+    <Compile Remove="Rendering\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>
