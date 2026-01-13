@@ -5,7 +5,20 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Asynkron.Profiler</RootNamespace>
     <AssemblyName>Asynkron.Profiler.Core</AssemblyName>
+    <PackageId>Asynkron.Profiler.Core</PackageId>
+    <Version>0.1.10</Version>
+    <Authors>Asynkron</Authors>
+    <Description>Core profiling models and trace analyzers for Asynkron.Profiler.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Asynkron/Asynkron.Profiler</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Asynkron/Asynkron.Profiler</PackageProjectUrl>
+    <PackageTags>profiling;dotnet;trace;performance</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.28" />

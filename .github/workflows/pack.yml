@@ -19,6 +19,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj -p:Version="$VERSION"
+          dotnet pack -c Release -o ./nupkg src/ProfilerCore/Asynkron.Profiler.Core.csproj -p:Version="$VERSION"
       - name: Publish to NuGet
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
