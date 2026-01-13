@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace Asynkron.Profiler;
 
-internal static class CallTreeFilters
+public static class CallTreeFilters
 {
     public static IReadOnlyList<CallTreeNode> GetVisibleChildren(
         CallTreeNode node,

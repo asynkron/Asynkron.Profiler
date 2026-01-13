@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace Asynkron.Profiler;
 
-internal sealed record ExceptionProfileResult(
+public sealed record ExceptionProfileResult(
     IReadOnlyList<ExceptionTypeSample> ExceptionTypes,
     CallTreeNode ThrowCallTreeRoot,
     long TotalThrown,

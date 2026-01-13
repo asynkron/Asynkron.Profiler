@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Asynkron.Profiler</RootNamespace>
+    <AssemblyName>Asynkron.Profiler.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.28" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\ProfileTool\Cpu\*.cs" Link="Cpu\%(Filename)%(Extension)" />
+    <Compile Include="..\ProfileTool\Memory\*.cs" Link="Memory\%(Filename)%(Extension)" />
+    <Compile Include="..\ProfileTool\Exceptions\*.cs" Link="Exceptions\%(Filename)%(Extension)" />
+    <Compile Include="..\ProfileTool\Contention\*.cs" Link="Contention\%(Filename)%(Extension)" />
+    <Compile Include="..\ProfileTool\Heap\*.cs" Link="Heap\%(Filename)%(Extension)" />
+    <Compile Include="..\ProfileTool\Rendering\NameFormatter.cs" Link="Rendering\NameFormatter.cs" />
+  </ItemGroup>
+</Project>

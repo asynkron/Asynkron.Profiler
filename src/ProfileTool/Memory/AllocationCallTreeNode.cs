@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace Asynkron.Profiler;
 
-internal sealed class AllocationCallTreeNode
+public sealed class AllocationCallTreeNode
 {
     public AllocationCallTreeNode(string name)
     {

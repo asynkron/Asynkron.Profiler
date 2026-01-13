@@ -1,3 +1,3 @@
 namespace Asynkron.Profiler;
 
-internal sealed record CallTreeMatch(CallTreeNode Node, int Depth, int Order);
+public sealed record CallTreeMatch(CallTreeNode Node, int Depth, int Order);

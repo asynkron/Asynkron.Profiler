@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace Asynkron.Profiler;
 
-internal sealed record CpuProfileResult(
+public sealed record CpuProfileResult(
     IReadOnlyList<FunctionSample> AllFunctions,
     double TotalTime,
     CallTreeNode CallTreeRoot,

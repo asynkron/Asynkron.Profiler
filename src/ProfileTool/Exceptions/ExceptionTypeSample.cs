@@ -1,3 +1,3 @@
 namespace Asynkron.Profiler;
 
-internal sealed record ExceptionTypeSample(string Type, long Count);
+public sealed record ExceptionTypeSample(string Type, long Count);

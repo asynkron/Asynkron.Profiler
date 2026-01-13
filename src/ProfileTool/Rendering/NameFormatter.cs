@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace Asynkron.Profiler;
 
-internal static class NameFormatter
+public static class NameFormatter
 {
     public static string FormatMethodDisplayName(string rawName)
     {

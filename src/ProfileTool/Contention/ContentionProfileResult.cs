@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace Asynkron.Profiler;
 
-internal sealed class ContentionProfileResult
+public sealed class ContentionProfileResult
 {
     public ContentionProfileResult(
         IReadOnlyList<FunctionSample> topFunctions,

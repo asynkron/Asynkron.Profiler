@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace Asynkron.Profiler;
 
-internal static class SpeedscopeParser
+public static class SpeedscopeParser
 {
     public static CpuProfileResult? ParseFile(string speedscopePath)
     {

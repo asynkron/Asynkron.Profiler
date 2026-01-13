@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace Asynkron.Profiler;
 
-internal sealed record MemoryProfileResult(
+public sealed record MemoryProfileResult(
     string? Iterations,
     string? TotalTime,
     string? PerIterationTime,
