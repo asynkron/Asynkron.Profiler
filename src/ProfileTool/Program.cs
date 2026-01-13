@@ -27,6 +27,7 @@ var jitNumberRegex = new Regex(
     RegexOptions.Compiled);
 var theme = Theme.Current;
 var treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
+var renderer = new ProfilerConsoleRenderer(theme);
 
 void PrintSection(string text, string? color = null)
 {
@@ -142,6 +143,7 @@ bool TryApplyTheme(string? themeName)
     Theme.Current = selectedTheme;
     theme = selectedTheme;
     treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
+    renderer = new ProfilerConsoleRenderer(theme);
     return true;
 }
 
@@ -5282,7 +5284,7 @@ rootCommand.SetHandler(context =>
 
         if (cpuResults != null)
         {
-            PrintCpuResults(
+            renderer.PrintCpuResults(
                 cpuResults,
                 label,
                 description,
@@ -5305,7 +5307,7 @@ rootCommand.SetHandler(context =>
         }
         else if (memoryResults != null)
         {
-            PrintMemoryResults(
+            renderer.PrintMemoryResults(
                 memoryResults,
                 label,
                 description,
@@ -5326,7 +5328,7 @@ rootCommand.SetHandler(context =>
                 : sharedTraceFile != null
                     ? AnalyzeCpuTrace(sharedTraceFile)
                     : CpuProfileCommand(command, label);
-            PrintCpuResults(
+            renderer.PrintCpuResults(
                 results,
                 label,
                 description,
@@ -5355,7 +5357,7 @@ rootCommand.SetHandler(context =>
                 : sharedTraceFile != null
                     ? MemoryProfileFromInput(sharedTraceFile, label)
                     : MemoryProfileCommand(command, label);
-            PrintMemoryResults(
+            renderer.PrintMemoryResults(
                 results,
                 label,
                 description,
@@ -5375,7 +5377,7 @@ rootCommand.SetHandler(context =>
             : sharedTraceFile != null
                 ? ExceptionProfileFromInput(sharedTraceFile, label)
                 : ExceptionProfileCommand(command, label);
-        PrintExceptionResults(
+        renderer.PrintExceptionResults(
             results,
             label,
             description,
@@ -5395,7 +5397,7 @@ rootCommand.SetHandler(context =>
         var results = hasInput
             ? ContentionProfileFromInput(inputPath!, label)
             : ContentionProfileCommand(command, label);
-        PrintContentionResults(
+        renderer.PrintContentionResults(
             results,
             label,
             description,
@@ -5414,7 +5416,7 @@ rootCommand.SetHandler(context =>
         var results = hasInput
             ? HeapProfileFromInput(inputPath!)
             : HeapProfileCommand(command, label);
-        PrintHeapResults(results, label, description);
+        renderer.PrintHeapResults(results, label, description);
     }
 });
 

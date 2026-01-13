@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.1.28" />
+    <PackageReference Include="Spectre.Console" Version="0.54.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -31,5 +32,7 @@
     <Compile Include="..\ProfileTool\Contention\*.cs" Link="Contention\%(Filename)%(Extension)" />
     <Compile Include="..\ProfileTool\Heap\*.cs" Link="Heap\%(Filename)%(Extension)" />
     <Compile Include="..\ProfileTool\Rendering\NameFormatter.cs" Link="Rendering\NameFormatter.cs" />
+    <Compile Include="..\ProfileTool\Rendering\CompactTreeGuide.cs" Link="Rendering\CompactTreeGuide.cs" />
+    <Compile Include="..\ProfileTool\Theme.cs" Link="Theme.cs" />
   </ItemGroup>
 </Project>
