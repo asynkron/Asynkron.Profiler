@@ -3,7 +3,7 @@ using Spectre.Console.Rendering;
 
 namespace Asynkron.Profiler;
 
-internal sealed class CompactTreeGuide : TreeGuide
+public sealed class CompactTreeGuide : TreeGuide
 {
     public override string GetPart(TreeGuidePart part)
     {
