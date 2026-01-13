@@ -801,7 +801,7 @@ public sealed class ProfilerConsoleRenderer
         table.ShowHeaders = !hideHeaders;
         table.ShowRowSeparators = false;
         table.Title = title != null
-            ? new TableTitle(Markup.FromMarkup(title))
+            ? new TableTitle(new Markup(title))
             : null;
 
         foreach (var column in columns)
