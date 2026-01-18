@@ -270,11 +270,20 @@ Object Bytes  Count  Type
 
 ## Troubleshooting
 
-- `dotnet-trace` not found: install with `dotnet tool install -g dotnet-trace` and ensure your global tool path is on `PATH`.
+### Prerequisites checklist
+
+- .NET SDK 10.x installed (`dotnet --list-sdks`).
+- Global tools installed and on `PATH`: `asynkron-profiler`, `dotnet-trace`, `dotnet-gcdump`.
+  - Default tool paths: `~/.dotnet/tools` (macOS/Linux) or `%USERPROFILE%\\.dotnet\\tools` (Windows).
+- Prefer running the built output (Release) instead of `dotnet run` to avoid build/restore noise.
+
+### Common failures
+
+- `dotnet-trace` not found: install with `dotnet tool install -g dotnet-trace`, then ensure the global tool path is on `PATH`.
 - `dotnet-gcdump` not found: install with `dotnet tool install -g dotnet-gcdump`.
-- Empty allocation tables: ensure you ran with `--memory` (GC allocation ticks) or provided a `.nettrace`/`.etlx` that includes GC allocation events.
-- Slow or huge traces: reduce the workload/iterations or add filters on your app side, then re-run.
-- The CLI checks for required tools on first use and prints install hints when missing.
+- `Failed to create session` or `Diagnostics IPC error`: the target process must allow diagnostics. Ensure it is not started with `DOTNET_EnableDiagnostics=0` or `COMPlus_EnableDiagnostics=0` and run as the same user.
+- No data or empty allocation tables: run with `--memory` (GC allocation ticks) or provide a `.nettrace`/`.etlx` that includes GC allocation events.
+- Slow or huge traces: reduce workload/iterations or add app-side filters, then re-run.
 
 ## Examples
 
