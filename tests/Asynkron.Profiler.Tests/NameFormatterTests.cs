@@ -24,6 +24,9 @@ public sealed class NameFormatterTests
     [Theory]
     [InlineData("System.Collections.Generic.Dictionary`2[System.String,System.Int32]", "Dictionary<String,Int32>")]
     [InlineData("System.String[]", "String[]")]
+    [InlineData("System.Int32[,]", "Int32[,]")]
+    [InlineData("System.Collections.Generic.Dictionary`2[System.String,System.Int32[,]]",
+        "Dictionary<String,Int32[,]>")]
     public void FormatsTypeNames(string raw, string expected)
     {
         var actual = NameFormatter.FormatTypeDisplayName(raw);
