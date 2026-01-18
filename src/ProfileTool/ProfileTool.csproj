@@ -8,7 +8,6 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>asynkron-profiler</ToolCommandName>
     <PackageId>asynkron-profiler</PackageId>
-    <Version>0.1.10</Version>
     <Authors>Asynkron</Authors>
     <Description>Lightweight CLI for CPU, memory allocation, exception, lock contention, and heap profiling of .NET commands.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
