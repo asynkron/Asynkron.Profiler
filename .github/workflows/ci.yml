@@ -14,11 +14,27 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
-          dotnet-quality: 'preview'
+          global-json-file: global.json
       - name: Restore
         run: dotnet restore
       - name: Build
         run: dotnet build -c Release --nologo
       - name: Test
         run: dotnet test -c Release --nologo
+
+  pack-validate:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Pack (dry run)
+        run: |
+          VERSION="0.0.0-ci.${GITHUB_RUN_NUMBER}"
+          dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj -p:Version="$VERSION"
+          dotnet pack -c Release -o ./nupkg src/ProfilerCore/Asynkron.Profiler.Core.csproj -p:Version="$VERSION"
+          test -f "./nupkg/asynkron-profiler.$VERSION.nupkg"
+          test -f "./nupkg/Asynkron.Profiler.Core.$VERSION.nupkg"
