@@ -79,9 +79,19 @@ public static class NameFormatter
             timeout);
 
         const string arrayToken = "__ARRAY__";
-        normalized = normalized.Replace("[]", arrayToken, StringComparison.Ordinal);
+        normalized = Regex.Replace(
+            normalized,
+            @"\[(?<commas>,*)\]",
+            match => $"{arrayToken}{match.Groups["commas"].Value}{arrayToken}",
+            RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
+            timeout);
         normalized = normalized.Replace('[', '<').Replace(']', '>');
-        normalized = normalized.Replace(arrayToken, "[]", StringComparison.Ordinal);
+        normalized = Regex.Replace(
+            normalized,
+            $"{arrayToken}(?<commas>,*){arrayToken}",
+            match => $"[{match.Groups["commas"].Value}]",
+            RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture,
+            timeout);
         normalized = normalized.Replace('+', '.');
 
         return normalized;
