@@ -14,6 +14,7 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+          include-prerelease: true
       - name: Pack
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
