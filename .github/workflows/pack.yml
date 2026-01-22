@@ -14,11 +14,33 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - name: Pack
+      - name: Resolve version
+        id: version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
+            echo "Tag must start with v and include a version (example: v1.2.3)."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
           dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj -p:Version="$VERSION"
           dotnet pack -c Release -o ./nupkg src/ProfilerCore/Asynkron.Profiler.Core.csproj -p:Version="$VERSION"
+      - name: Validate package versions
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          expected=".$VERSION.nupkg"
+          for package in ./nupkg/*.nupkg; do
+            name="$(basename "$package")"
+            if [[ "$name" != *"$expected" ]]; then
+              echo "Package $name does not match version $VERSION."
+              exit 1
+            fi
+          done
       - name: Publish to NuGet
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
