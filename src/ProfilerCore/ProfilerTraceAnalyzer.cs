@@ -66,7 +66,7 @@ public sealed class ProfilerTraceAnalyzer
         try
         {
             var frameTotals = new Dictionary<string, double>(StringComparer.Ordinal);
-            var frameCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var frameCounts = new Dictionary<string, long>(StringComparer.Ordinal);
             var frameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
             var framesList = new List<string>();
             var callTreeRoot = new CallTreeNode(-1, "Total");
@@ -270,10 +270,7 @@ public sealed class ProfilerTraceAnalyzer
                         child.Total += weight;
                     }
 
-                    if (child.Calls < int.MaxValue)
-                    {
-                        child.Calls += 1;
-                    }
+                    child.Calls += 1;
 
                     frameCounts.TryGetValue(frame, out var count);
                     frameCounts[frame] = count + 1;
@@ -298,7 +295,7 @@ public sealed class ProfilerTraceAnalyzer
             }
 
             callTreeRoot.Total = callTreeTotal;
-            callTreeRoot.Calls = totalSamples > int.MaxValue ? int.MaxValue : (int)totalSamples;
+            callTreeRoot.Calls = totalSamples;
 
             var allFunctions = frameTotals
                 .OrderByDescending(kv => kv.Value)
@@ -559,13 +556,13 @@ public sealed class ProfilerTraceAnalyzer
             source.Process();
 
             throwRoot.Total = totalThrown;
-            throwRoot.Calls = totalThrown > int.MaxValue ? int.MaxValue : (int)totalThrown;
+            throwRoot.Calls = totalThrown;
 
             CallTreeNode? catchRootResult = null;
             if (totalCaught > 0)
             {
                 catchRoot.Total = totalCaught;
-                catchRoot.Calls = totalCaught > int.MaxValue ? int.MaxValue : (int)totalCaught;
+                catchRoot.Calls = totalCaught;
                 catchRootResult = catchRoot;
             }
 
@@ -578,7 +575,7 @@ public sealed class ProfilerTraceAnalyzer
                 }
 
                 typeRoot.Total = count;
-                typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
+                typeRoot.Calls = count;
             }
 
             foreach (var (typeName, count) in typeCatchCounts)
@@ -590,7 +587,7 @@ public sealed class ProfilerTraceAnalyzer
                 }
 
                 typeRoot.Total = count;
-                typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
+                typeRoot.Calls = count;
             }
 
             foreach (var (typeName, thrownCount) in typeThrowCounts)
@@ -674,7 +671,7 @@ public sealed class ProfilerTraceAnalyzer
         try
         {
             var frameTotals = new Dictionary<string, double>(StringComparer.Ordinal);
-            var frameCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var frameCounts = new Dictionary<string, long>(StringComparer.Ordinal);
             var frameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
             var framesList = new List<string>();
             var callTreeRoot = new CallTreeNode(-1, "Total");
@@ -746,10 +743,7 @@ public sealed class ProfilerTraceAnalyzer
                     }
 
                     child.Total += durationMs;
-                    if (child.Calls < int.MaxValue)
-                    {
-                        child.Calls += 1;
-                    }
+                    child.Calls += 1;
 
                     frameTotals[frame] = frameTotals.TryGetValue(frame, out var total)
                         ? total + durationMs
@@ -827,7 +821,7 @@ public sealed class ProfilerTraceAnalyzer
             source.Process();
 
             callTreeRoot.Total = totalWaitMs;
-            callTreeRoot.Calls = totalCount > int.MaxValue ? int.MaxValue : (int)totalCount;
+            callTreeRoot.Calls = totalCount;
 
             var topFunctions = frameTotals
                 .OrderByDescending(kv => kv.Value)
@@ -890,10 +884,7 @@ public sealed class ProfilerTraceAnalyzer
             }
 
             child.Total += 1;
-            if (child.Calls < int.MaxValue)
-            {
-                child.Calls += 1;
-            }
+            child.Calls += 1;
 
             node = child;
         }
@@ -953,8 +944,13 @@ public sealed class ProfilerTraceAnalyzer
         }
     }
 
-    private static IEnumerable<string> EnumerateAllocationFrames(TraceCallStack stack)
+    private static IEnumerable<string> EnumerateAllocationFrames(TraceCallStack? stack)
     {
+        if (stack == null)
+        {
+            yield break;
+        }
+
         for (var current = stack; current != null; current = current.Caller)
         {
             var methodName = current.CodeAddress?.FullMethodName;
@@ -1027,7 +1023,7 @@ public sealed class ProfilerTraceAnalyzer
                     }
                 }
             }
-            catch
+            catch (Exception)
             {
                 typeName = null;
             }
@@ -1061,7 +1057,7 @@ public sealed class ProfilerTraceAnalyzer
                     return value.ToString();
                 }
             }
-            catch
+            catch (Exception)
             {
                 // Ignore missing payloads.
             }
@@ -1093,7 +1089,7 @@ public sealed class ProfilerTraceAnalyzer
                 _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
             };
         }
-        catch
+        catch (Exception)
         {
             return null;
         }

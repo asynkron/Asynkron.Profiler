@@ -58,7 +58,7 @@ bool TryParseHexColor(string value, out (byte R, byte G, byte B) rgb)
     }
 
     var trimmed = value.Trim();
-    if (trimmed.StartsWith("#", StringComparison.Ordinal))
+    if (trimmed.StartsWith('#'))
     {
         trimmed = trimmed[1..];
     }
@@ -171,7 +171,7 @@ int GetHelpWidth()
     {
         return Math.Max(80, Console.WindowWidth);
     }
-    catch
+    catch (IOException)
     {
         return 120;
     }
@@ -291,7 +291,7 @@ bool EnsureToolAvailable(string toolName, string installHint)
         return cached;
     }
 
-    var (success, _, stderr) = RunProcess(toolName, new[] { "--version" }, timeoutMs: 10000);
+    var (success, _, stderr) = RunProcess(toolName, ["--version"], timeoutMs: 10000);
     if (!success)
     {
         var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
@@ -422,7 +422,7 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
     try
     {
         var frameTotals = new Dictionary<string, double>(StringComparer.Ordinal);
-        var frameCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var frameCounts = new Dictionary<string, long>(StringComparer.Ordinal);
         var frameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
         var framesList = new List<string>();
         var callTreeRoot = new CallTreeNode(-1, "Total");
@@ -633,10 +633,7 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
                     child.Total += weight;
                 }
 
-                if (child.Calls < int.MaxValue)
-                {
-                    child.Calls += 1;
-                }
+                child.Calls += 1;
 
                 frameCounts.TryGetValue(frame, out var count);
                 frameCounts[frame] = count + 1;
@@ -662,7 +659,7 @@ CpuProfileResult? AnalyzeCpuTrace(string traceFile)
         }
 
         callTreeRoot.Total = callTreeTotal;
-        callTreeRoot.Calls = totalSamples > int.MaxValue ? int.MaxValue : (int)totalSamples;
+        callTreeRoot.Calls = totalSamples;
 
         var allFunctions = frameTotals
             .OrderByDescending(kv => kv.Value)
@@ -1123,13 +1120,13 @@ ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
         source.Process();
 
         throwRoot.Total = totalThrown;
-        throwRoot.Calls = totalThrown > int.MaxValue ? int.MaxValue : (int)totalThrown;
+        throwRoot.Calls = totalThrown;
 
         CallTreeNode? catchRootResult = null;
         if (totalCaught > 0)
         {
             catchRoot.Total = totalCaught;
-            catchRoot.Calls = totalCaught > int.MaxValue ? int.MaxValue : (int)totalCaught;
+            catchRoot.Calls = totalCaught;
             catchRootResult = catchRoot;
         }
 
@@ -1142,7 +1139,7 @@ ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
             }
 
             typeRoot.Total = count;
-            typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
+            typeRoot.Calls = count;
         }
 
         foreach (var (typeName, count) in typeCatchCounts)
@@ -1154,7 +1151,7 @@ ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
             }
 
             typeRoot.Total = count;
-            typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
+            typeRoot.Calls = count;
         }
 
         foreach (var (typeName, thrownCount) in typeThrowCounts)
@@ -1293,7 +1290,7 @@ ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
     try
     {
         var frameTotals = new Dictionary<string, double>(StringComparer.Ordinal);
-        var frameCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var frameCounts = new Dictionary<string, long>(StringComparer.Ordinal);
         var frameIndices = new Dictionary<string, int>(StringComparer.Ordinal);
         var framesList = new List<string>();
         var callTreeRoot = new CallTreeNode(-1, "Total");
@@ -1373,10 +1370,7 @@ ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
                 }
 
                 child.Total += durationMs;
-                if (child.Calls < int.MaxValue)
-                {
-                    child.Calls += 1;
-                }
+                child.Calls += 1;
 
                 frameTotals[frame] = frameTotals.TryGetValue(frame, out var total)
                     ? total + durationMs
@@ -1454,7 +1448,7 @@ ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
         source.Process();
 
         callTreeRoot.Total = totalWaitMs;
-        callTreeRoot.Calls = totalCount > int.MaxValue ? int.MaxValue : (int)totalCount;
+        callTreeRoot.Calls = totalCount;
 
         var topFunctions = frameTotals
             .OrderByDescending(kv => kv.Value)
@@ -1527,10 +1521,7 @@ void RecordExceptionStack(
         }
 
         child.Total += 1;
-        if (child.Calls < int.MaxValue)
-        {
-            child.Calls += 1;
-        }
+        child.Calls += 1;
 
         node = child;
     }
@@ -1780,8 +1771,13 @@ AllocationCallTreeResult? AnalyzeAllocationTrace(string traceFile)
     }
 }
 
-IEnumerable<string> EnumerateAllocationFrames(TraceCallStack stack)
+IEnumerable<string> EnumerateAllocationFrames(TraceCallStack? stack)
 {
+    if (stack == null)
+    {
+        yield break;
+    }
+
     for (var current = stack; current != null; current = current.Caller)
     {
         var methodName = current.CodeAddress?.FullMethodName;
@@ -2563,7 +2559,7 @@ string ColorizeJitDisasmLine(string line)
     var mnemonicColor = AnsiColor(theme.TextColor);
     var numberColor = AnsiColor(theme.LeafHighlightColor);
 
-    if (line.StartsWith(";", StringComparison.Ordinal))
+    if (line.StartsWith(';'))
     {
         return WrapAnsi(line, commentColor);
     }
@@ -2735,7 +2731,7 @@ void PrintJitDisasmSummary(string logPath)
             {
                 methodLine = line.Substring("; Assembly listing for method ".Length).Trim();
                 var tierStart = methodLine.LastIndexOf(" (", StringComparison.Ordinal);
-                if (tierStart > 0 && methodLine.EndsWith(")", StringComparison.Ordinal))
+                if (tierStart > 0 && methodLine.EndsWith(')'))
                 {
                     tier = methodLine[(tierStart + 2)..^1];
                     methodName = methodLine[..tierStart];

@@ -359,9 +359,9 @@ public static class SpeedscopeParser
         return sum;
     }
 
-    private static int SumCallTreeCalls(CallTreeNode node)
+    private static long SumCallTreeCalls(CallTreeNode node)
     {
-        var sum = 0;
+        var sum = 0L;
         foreach (var child in node.Children.Values)
         {
             sum += child.Calls;
