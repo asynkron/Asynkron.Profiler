@@ -10,18 +10,30 @@ Install globally:
 dotnet tool install -g asynkron-profiler --prerelease
 ```
 
+Requires `.NET SDK 9.x` or `.NET SDK 10.x`.
+
 A lightweight CLI for CPU, memory allocation, exception, lock contention, and heap profiling of any .NET command using `dotnet-trace` and `dotnet-gcdump`.
 
 This is a profiler frontend/CLI UI built for humans and automation (including AI agents). It outputs plain‑text, structured summaries so the same insights you’d inspect in GUI tools like dotMemory or dotTrace are available to scripts and agent workflows.
 
 ## Prerequisites
 
-- .NET SDK 10.x
-- `dotnet-trace` and `dotnet-gcdump` installed:
+- .NET SDK 9.x or 10.x
+- `dotnet-trace` 9.0.661903 or newer
+- `dotnet-gcdump` 9.0.661903 or newer
+
+Install the external tools:
 
 ```bash
 dotnet tool install -g dotnet-trace
 dotnet tool install -g dotnet-gcdump
+```
+
+If they are already installed, update them to the latest version:
+
+```bash
+dotnet tool update -g dotnet-trace
+dotnet tool update -g dotnet-gcdump
 ```
 
 ## Profile your own .NET app

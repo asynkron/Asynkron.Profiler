@@ -7,34 +7,47 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  build-validate:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        install_sdk: ["9.0.304", "10.0.100"]
+    env:
+      PACKAGE_VERSION: 0.0.0-ci.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
+          dotnet-version: |
+            9.0.x
+            10.0.x
       - name: Restore
         run: dotnet restore
       - name: Build
         run: dotnet build -c Release --nologo
       - name: Test
         run: dotnet test -c Release --nologo
-
-  pack-validate:
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
       - name: Pack (dry run)
         run: |
-          VERSION="0.0.0-ci.${GITHUB_RUN_NUMBER}"
-          dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj -p:Version="$VERSION"
-          dotnet pack -c Release -o ./nupkg src/ProfilerCore/Asynkron.Profiler.Core.csproj -p:Version="$VERSION"
-          test -f "./nupkg/asynkron-profiler.$VERSION.nupkg"
-          test -f "./nupkg/Asynkron.Profiler.Core.$VERSION.nupkg"
+          dotnet pack -c Release -o ./nupkg src/ProfileTool/ProfileTool.csproj -p:Version="$PACKAGE_VERSION"
+          dotnet pack -c Release -o ./nupkg src/ProfilerCore/Asynkron.Profiler.Core.csproj -p:Version="$PACKAGE_VERSION"
+          test -f "./nupkg/asynkron-profiler.$PACKAGE_VERSION.nupkg"
+          test -f "./nupkg/Asynkron.Profiler.Core.$PACKAGE_VERSION.nupkg"
+      - name: Install packed tool on SDK ${{ matrix.install_sdk }}
+        run: |
+          tmpdir="$(mktemp -d)"
+          toolpath="$(mktemp -d)"
+          cat > "$tmpdir/global.json" <<JSON
+          {
+            "sdk": {
+              "version": "${{ matrix.install_sdk }}",
+              "rollForward": "disable"
+            }
+          }
+          JSON
+          cp "./nupkg/asynkron-profiler.$PACKAGE_VERSION.nupkg" "$tmpdir/"
+          cd "$tmpdir"
+          dotnet --version
+          dotnet tool install --tool-path "$toolpath" asynkron-profiler --add-source "$PWD" --version "$PACKAGE_VERSION"
+          "$toolpath/asynkron-profiler" --help

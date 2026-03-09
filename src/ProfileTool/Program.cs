@@ -146,6 +146,8 @@ IReadOnlyList<string> GetUsageExampleLines()
         "General:",
         "  asynkron-profiler --help",
         "",
+        $"Prerequisites: .NET SDK 9.x or 10.x, {ExternalToolValidator.DotnetTrace.ToolName} >= {ExternalToolValidator.DotnetTrace.MinimumVersion}, {ExternalToolValidator.DotnetGcdump.ToolName} >= {ExternalToolValidator.DotnetGcdump.MinimumVersion}",
+        "",
         "Themes:",
         "  asynkron-profiler --theme onedark --cpu -- ./bin/Release/<tfm>/MyApp",
         $"  Available: {Theme.AvailableThemes}"
@@ -269,9 +271,7 @@ int GetHelpWidth()
 var outputDir = Path.Combine(Environment.CurrentDirectory, "profile-output");
 Directory.CreateDirectory(outputDir);
 
-var toolAvailability = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-const string DotnetTraceInstall = "dotnet tool install -g dotnet-trace";
-const string DotnetGcdumpInstall = "dotnet tool install -g dotnet-gcdump";
+var toolAvailability = new Dictionary<string, ExternalToolCheckResult>(StringComparer.OrdinalIgnoreCase);
 
 if (Console.IsOutputRedirected)
 {
@@ -284,24 +284,21 @@ if (Console.IsOutputRedirected)
     AnsiConsole.Profile.Width = 200;
 }
 
-bool EnsureToolAvailable(string toolName, string installHint)
+bool EnsureToolAvailable(ExternalToolRequirement requirement)
 {
-    if (toolAvailability.TryGetValue(toolName, out var cached))
+    if (toolAvailability.TryGetValue(requirement.ToolName, out var cached))
     {
-        return cached;
+        return cached.IsSatisfied;
     }
 
-    var (success, _, stderr) = RunProcess(toolName, ["--version"], timeoutMs: 10000);
-    if (!success)
+    var result = ExternalToolValidator.Validate(requirement, RunProcess);
+    toolAvailability[requirement.ToolName] = result;
+    if (!result.IsSatisfied)
     {
-        var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{toolName} unavailable:[/] {Markup.Escape(detail)}");
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Install:[/] {Markup.Escape(installHint)}");
-        toolAvailability[toolName] = false;
+        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{Markup.Escape(ExternalToolValidator.BuildFailureMessage(requirement, result))}[/]");
         return false;
     }
 
-    toolAvailability[toolName] = true;
     return true;
 }
 
@@ -314,7 +311,7 @@ string BuildExceptionProvider()
 
 string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool includeException)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!EnsureToolAvailable(ExternalToolValidator.DotnetTrace))
     {
         return null;
     }
@@ -376,7 +373,7 @@ string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool
 
 CpuProfileResult? CpuProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!EnsureToolAvailable(ExternalToolValidator.DotnetTrace))
     {
         return null;
     }
@@ -792,7 +789,7 @@ CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
 
 MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!EnsureToolAvailable(ExternalToolValidator.DotnetTrace))
     {
         return null;
     }
@@ -911,7 +908,7 @@ MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
 
 ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!EnsureToolAvailable(ExternalToolValidator.DotnetTrace))
     {
         return null;
     }
@@ -1228,7 +1225,7 @@ ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
 
 ContentionProfileResult? ContentionProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!EnsureToolAvailable(ExternalToolValidator.DotnetTrace))
     {
         return null;
     }
@@ -2215,7 +2212,7 @@ bool StartsWithDigits(string name)
 
 HeapProfileResult? HeapProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
+    if (!EnsureToolAvailable(ExternalToolValidator.DotnetGcdump))
     {
         return null;
     }
@@ -2953,7 +2950,7 @@ HeapProfileResult? HeapProfileFromInput(string inputPath)
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
     if (extension == ".gcdump")
     {
-        if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
+        if (!EnsureToolAvailable(ExternalToolValidator.DotnetGcdump))
         {
             return null;
         }
@@ -3122,7 +3119,8 @@ var commandArg = new Argument<string[]>("command", () => Array.Empty<string>(),
     "Command to profile (pass after --)");
 commandArg.Arity = ArgumentArity.ZeroOrMore;
 
-var rootCommand = new RootCommand("Asynkron Profiler - CPU/Memory/Exception/Contention/Heap profiling for .NET commands")
+var rootCommand = new RootCommand(
+    $"Asynkron Profiler - CPU/Memory/Exception/Contention/Heap profiling for .NET commands (requires {ExternalToolValidator.DotnetTrace.ToolName} and {ExternalToolValidator.DotnetGcdump.ToolName} >= {ExternalToolValidator.DotnetTrace.MinimumVersion})")
 {
     cpuOption,
     timelineOption,
