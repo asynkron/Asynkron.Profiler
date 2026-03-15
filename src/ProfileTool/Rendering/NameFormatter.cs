@@ -236,6 +236,7 @@ public static class NameFormatter
         return typePart.Contains("<>c__DisplayClass", StringComparison.Ordinal) ||
                typePart.Contains("+<>c", StringComparison.Ordinal);
     }
+    private static readonly char[] anyOf = new[] { '|', '>' };
 
     private static string? ExtractStateMachineMethodName(string typePart)
     {
@@ -243,7 +244,7 @@ public static class NameFormatter
         if (localFunctionIndex >= 0)
         {
             var localStart = localFunctionIndex + 3;
-            var localEnd = typePart.IndexOfAny(new[] { '|', '>' }, localStart);
+            var localEnd = typePart.IndexOfAny(anyOf, localStart);
             if (localEnd < 0)
             {
                 localEnd = typePart.Length;
@@ -322,16 +323,16 @@ public static class NameFormatter
         }
 
         var trimmed = name.Trim();
-        while (trimmed.StartsWith("<", StringComparison.Ordinal) ||
-               trimmed.EndsWith(">", StringComparison.Ordinal))
+        while (trimmed.StartsWith('<') ||
+               trimmed.EndsWith('>'))
         {
             trimmed = trimmed.Trim('<', '>');
         }
 
-        while (trimmed.EndsWith("$", StringComparison.Ordinal))
+        while (trimmed.EndsWith('$'))
         {
             trimmed = trimmed[..^1];
-            while (trimmed.EndsWith(">", StringComparison.Ordinal))
+            while (trimmed.EndsWith('>'))
             {
                 trimmed = trimmed.TrimEnd('>');
             }
