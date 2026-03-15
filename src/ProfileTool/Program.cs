@@ -35,6 +35,25 @@ bool TryApplyTheme(string? themeName)
     return true;
 }
 
+void AttachProcessDataHandlers(Process process, Action<string> onStdout, Action<string> onStderr)
+{
+    process.OutputDataReceived += (_, e) =>
+    {
+        if (e.Data != null)
+        {
+            onStdout(e.Data);
+        }
+    };
+
+    process.ErrorDataReceived += (_, e) =>
+    {
+        if (e.Data != null)
+        {
+            onStderr(e.Data);
+        }
+    };
+}
+
 
 IReadOnlyList<string> GetUsageExampleLines()
 {
@@ -154,30 +173,22 @@ int GetHelpWidth()
         var stdoutLock = new object();
         var stderrLock = new object();
 
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data == null)
+        AttachProcessDataHandlers(
+            process,
+            data =>
             {
-                return;
-            }
-
-            lock (stdoutLock)
+                lock (stdoutLock)
+                {
+                    stdout.AppendLine(data);
+                }
+            },
+            data =>
             {
-                stdout.AppendLine(e.Data);
-            }
-        };
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data == null)
-            {
-                return;
-            }
-
-            lock (stderrLock)
-            {
-                stderr.AppendLine(e.Data);
-            }
-        };
+                lock (stderrLock)
+                {
+                    stderr.AppendLine(data);
+                }
+            });
 
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -888,24 +899,7 @@ string[] JitInlineDumpCommand(
     stdoutWriter.AutoFlush = true;
     stderrWriter.AutoFlush = true;
 
-    proc.OutputDataReceived += (_, e) =>
-    {
-        if (e.Data == null)
-        {
-            return;
-        }
-
-        stdoutWriter.WriteLine(e.Data);
-    };
-    proc.ErrorDataReceived += (_, e) =>
-    {
-        if (e.Data == null)
-        {
-            return;
-        }
-
-        stderrWriter.WriteLine(e.Data);
-    };
+    AttachProcessDataHandlers(proc, stdoutWriter.WriteLine, stderrWriter.WriteLine);
 
     proc.BeginOutputReadLine();
     proc.BeginErrorReadLine();
@@ -996,25 +990,14 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir, 
     stderrWriter.AutoFlush = true;
     colorWriter.AutoFlush = true;
 
-    proc.OutputDataReceived += (_, e) =>
-    {
-        if (e.Data == null)
+    AttachProcessDataHandlers(
+        proc,
+        data =>
         {
-            return;
-        }
-
-        stdoutWriter.WriteLine(e.Data);
-        colorWriter.WriteLine(ColorizeJitDisasmLine(e.Data));
-    };
-    proc.ErrorDataReceived += (_, e) =>
-    {
-        if (e.Data == null)
-        {
-            return;
-        }
-
-        stderrWriter.WriteLine(e.Data);
-    };
+            stdoutWriter.WriteLine(data);
+            colorWriter.WriteLine(ColorizeJitDisasmLine(data));
+        },
+        stderrWriter.WriteLine);
 
     proc.BeginOutputReadLine();
     proc.BeginErrorReadLine();

@@ -18,6 +18,11 @@ public sealed partial class ProfilerConsoleRenderer
     private const double HotnessColorMid = 0.0025d;
     private const double HotnessColorMax = 0.4d;
     private const string HotspotMarker = "\U0001F525";
+    private static readonly TableColumnSpec[] SummaryColumns =
+    {
+        new(string.Empty),
+        new(string.Empty)
+    };
 
     private readonly Theme _theme;
     private Style _treeGuideStyle;
@@ -172,37 +177,13 @@ public sealed partial class ProfilerConsoleRenderer
             }
         };
 
-        ConsoleThemeHelpers.PrintSection("Summary");
-        WriteTable(
-            new[]
-            {
-                new TableColumnSpec(string.Empty),
-                new TableColumnSpec(string.Empty)
-            },
-            summaryRows,
-            hideHeaders: true);
+        WriteSummaryTable(summaryRows);
 
-        AnsiConsole.Write(BuildCallTree(
-            results,
-            useSelfTime: false,
-            resolvedRoot,
-            includeRuntime,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeRootMode,
-            callTreeSiblingCutoffPercent,
-            timeUnitLabel,
-            countSuffix,
-            allocationTypeLimit,
-            exceptionTypeLimit,
-            hotThreshold,
-            showTimeline,
-            timelineWidth));
-        if (showSelfTimeTree)
+        void RenderCpuCallTree(bool useSelfTime, bool allowTimeline)
         {
             AnsiConsole.Write(BuildCallTree(
                 results,
-                useSelfTime: true,
+                useSelfTime,
                 resolvedRoot,
                 includeRuntime,
                 callTreeDepth,
@@ -214,7 +195,14 @@ public sealed partial class ProfilerConsoleRenderer
                 allocationTypeLimit,
                 exceptionTypeLimit,
                 hotThreshold,
-                showTimeline: false));
+                showTimeline: allowTimeline && showTimeline,
+                timelineWidth: timelineWidth));
+        }
+
+        RenderCpuCallTree(useSelfTime: false, allowTimeline: true);
+        if (showSelfTimeTree)
+        {
+            RenderCpuCallTree(useSelfTime: true, allowTimeline: false);
         }
     }
 
@@ -406,15 +394,7 @@ public sealed partial class ProfilerConsoleRenderer
             });
         }
 
-        ConsoleThemeHelpers.PrintSection("Summary");
-        WriteTable(
-            new[]
-            {
-                new TableColumnSpec(string.Empty),
-                new TableColumnSpec(string.Empty)
-            },
-            summaryRows,
-            hideHeaders: true);
+        WriteSummaryTable(summaryRows);
 
         if (summaryThrown > 0)
         {
@@ -590,15 +570,7 @@ public sealed partial class ProfilerConsoleRenderer
             }
         };
 
-        ConsoleThemeHelpers.PrintSection("Summary");
-        WriteTable(
-            new[]
-            {
-                new TableColumnSpec(string.Empty),
-                new TableColumnSpec(string.Empty)
-            },
-            summaryRows,
-            hideHeaders: true);
+        WriteSummaryTable(summaryRows);
 
         var resolvedRoot = ResolveCallTreeRootFilter(rootFilter);
         AnsiConsole.Write(BuildContentionCallTree(
@@ -792,6 +764,12 @@ public sealed partial class ProfilerConsoleRenderer
         AnsiConsole.Write(BuildTableWithRows(columns, rows, title, hideHeaders, headerColor));
     }
 
+    private static void WriteSummaryTable(IEnumerable<IReadOnlyList<string>> rows)
+    {
+        ConsoleThemeHelpers.PrintSection("Summary");
+        WriteTable(SummaryColumns, rows, hideHeaders: true);
+    }
+
     private static Rows BuildTableBlock(Table table, string title, string color)
     {
         return new Rows(
@@ -878,24 +856,19 @@ public sealed partial class ProfilerConsoleRenderer
             IsRuntimeNoise);
         foreach (var child in children)
         {
-            var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
-            var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
-                         CallTreeFilters.GetVisibleChildren(
-                             child,
-                             includeRuntime,
-                             useSelfTime: false,
-                             maxWidth,
-                             siblingCutoffPercent,
-                             IsRuntimeNoise).Count == 0;
-            var childNode = tree.AddNode(FormatCallTreeLine(
+            var (childNode, isSpecialLeaf) = AddCallTreeChildNode(
+                tree.AddNode,
                 child,
                 rootTotal,
                 totalSamples,
                 useSelfTime: false,
-                isRoot: false,
+                includeRuntime,
+                depth: 1,
+                maxDepth,
+                maxWidth,
+                siblingCutoffPercent,
                 timeUnitLabel: "ms",
-                countSuffix: "x",
-                isLeaf: isLeaf));
+                countSuffix: "x");
             if (!isSpecialLeaf)
             {
                 AddCallTreeChildren(
@@ -1265,28 +1238,21 @@ public sealed partial class ProfilerConsoleRenderer
         {
             var childHotness = ComputeHotness(child, rootTotal, totalSamples);
             var isHotspot = IsFireEmojiCandidate(childHotness, hotThreshold);
-            var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
-            var isLeaf = isSpecialLeaf || maxDepth <= 1 ||
-                         CallTreeFilters.GetVisibleChildren(
-                             child,
-                             includeRuntime,
-                             useSelfTime,
-                             maxWidth,
-                             siblingCutoffPercent,
-                             IsRuntimeNoise).Count == 0;
-            var childNode = tree.AddNode(FormatCallTreeLine(
+            var (childNode, isSpecialLeaf) = AddCallTreeChildNode(
+                tree.AddNode,
                 child,
                 rootTotal,
                 totalSamples,
                 useSelfTime,
-                isRoot: false,
-                timeUnitLabel: timeUnitLabel,
-                countSuffix: countSuffix,
-                isLeaf: isLeaf,
-                timeline: null,
-                depth: 1,
+                includeRuntime,
+                1,
+                maxDepth,
+                maxWidth,
+                siblingCutoffPercent,
+                timeUnitLabel,
+                countSuffix,
                 isHotspot: isHotspot,
-                useHeatColor: true));
+                useHeatColor: true);
             AddCallTreeDecorationsAndChildren(
                 childNode,
                 child,
@@ -1492,34 +1458,24 @@ public sealed partial class ProfilerConsoleRenderer
             IsRuntimeNoise);
         foreach (var child in children)
         {
-            var nextDepth = depth + 1;
-            var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
-            var childChildren = !isSpecialLeaf && nextDepth <= maxDepth
-                ? CallTreeFilters.GetVisibleChildren(
-                    child,
-                    includeRuntime,
-                    useSelfTime,
-                    maxWidth,
-                    siblingCutoffPercent,
-                    IsRuntimeNoise)
-                : Array.Empty<CallTreeNode>();
-            var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
             var childHotness = ComputeHotness(child, totalTime, totalSamples);
             var isHotspot = highlightHotspots && IsFireEmojiCandidate(childHotness, hotThreshold);
-
-            var childNode = parent.AddNode(FormatCallTreeLine(
+            var (childNode, isSpecialLeaf) = AddCallTreeChildNode(
+                parent.AddNode,
                 child,
                 totalTime,
                 totalSamples,
                 useSelfTime,
-                isRoot: false,
-                timeUnitLabel: timeUnitLabel,
-                countSuffix: countSuffix,
-                isLeaf: isLeaf,
-                timeline: timeline,
-                depth: depth,
-                isHotspot: isHotspot,
-                useHeatColor: highlightHotspots));
+                includeRuntime,
+                depth,
+                maxDepth,
+                maxWidth,
+                siblingCutoffPercent,
+                timeUnitLabel,
+                countSuffix,
+                timeline,
+                isHotspot,
+                highlightHotspots);
             AddCallTreeDecorationsAndChildren(
                 childNode,
                 child,
@@ -1545,6 +1501,65 @@ public sealed partial class ProfilerConsoleRenderer
                     highlightHotspots,
                     timeline));
         }
+    }
+
+    private static bool HasVisibleChildren(
+        CallTreeNode node,
+        bool includeRuntime,
+        bool useSelfTime,
+        int maxWidth,
+        int siblingCutoffPercent)
+    {
+        return CallTreeFilters.GetVisibleChildren(
+            node,
+            includeRuntime,
+            useSelfTime,
+            maxWidth,
+            siblingCutoffPercent,
+            IsRuntimeNoise).Count > 0;
+    }
+
+    private (TreeNode Node, bool IsSpecialLeaf) AddCallTreeChildNode(
+        Func<string, TreeNode> addNode,
+        CallTreeNode child,
+        double totalTime,
+        double totalSamples,
+        bool useSelfTime,
+        bool includeRuntime,
+        int depth,
+        int maxDepth,
+        int maxWidth,
+        int siblingCutoffPercent,
+        string timeUnitLabel,
+        string countSuffix,
+        TimelineContext? timeline = null,
+        bool isHotspot = false,
+        bool useHeatColor = false)
+    {
+        var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
+        var isLeaf = isSpecialLeaf || depth >= maxDepth ||
+                     !HasVisibleChildren(
+                         child,
+                         includeRuntime,
+                         useSelfTime,
+                         maxWidth,
+                         siblingCutoffPercent);
+
+        var childNode = addNode(FormatCallTreeLine(
+            child,
+            totalTime,
+            totalSamples,
+            useSelfTime,
+            isRoot: false,
+            timeUnitLabel: timeUnitLabel,
+            countSuffix: countSuffix,
+            isLeaf: isLeaf,
+            timeline: timeline,
+            depth: depth,
+            isHotspot: isHotspot,
+            useHeatColor: useHeatColor));
+
+        return (childNode, isSpecialLeaf);
     }
 
     private void AddCallTreeDecorationsAndChildren(
