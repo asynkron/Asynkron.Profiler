@@ -79,18 +79,11 @@ public sealed partial class ProfilerConsoleRenderer
 
         foreach (var entry in filteredList.Take(15))
         {
-            var funcName = FormatFunctionDisplayName(entry.Name);
-            if (funcName.Length > 70) funcName = funcName[..67] + "...";
-
             var timeMs = entry.TimeMs;
             var calls = entry.Calls;
             var timeMsText = FormatCpuTime(timeMs, timeUnitLabel);
             var callsText = calls.ToString("N0", CultureInfo.InvariantCulture);
-            var funcText = Markup.Escape(funcName);
-            if (IsUnmanagedFrame(funcName))
-            {
-                funcText = $"[{_theme.RuntimeTypeColor}]{funcText}[/]";
-            }
+            var funcText = FunctionDisplayFormatter.FormatFunctionCell(entry.Name, _theme.RuntimeTypeColor);
 
             rows.Add(new[]
             {
@@ -402,18 +395,8 @@ public sealed partial class ProfilerConsoleRenderer
 
                 foreach (var entry in catchList.Take(15))
                 {
-                    var funcName = FormatFunctionDisplayName(entry.Name);
-                    if (funcName.Length > 70)
-                    {
-                        funcName = funcName[..67] + "...";
-                    }
-
                     var countText = entry.Count.ToString("N0", CultureInfo.InvariantCulture);
-                    var funcText = Markup.Escape(funcName);
-                    if (IsUnmanagedFrame(funcName))
-                    {
-                        funcText = $"[{_theme.RuntimeTypeColor}]{funcText}[/]";
-                    }
+                    var funcText = FunctionDisplayFormatter.FormatFunctionCell(entry.Name, _theme.RuntimeTypeColor);
 
                     catchRows.Add(new[]
                     {
@@ -477,19 +460,9 @@ public sealed partial class ProfilerConsoleRenderer
 
         foreach (var entry in filteredList.Take(15))
         {
-            var funcName = FormatFunctionDisplayName(entry.Name);
-            if (funcName.Length > 70)
-            {
-                funcName = funcName[..67] + "...";
-            }
-
             var waitText = entry.TimeMs.ToString("F2", CultureInfo.InvariantCulture);
             var countText = entry.Calls.ToString("N0", CultureInfo.InvariantCulture);
-            var funcText = Markup.Escape(funcName);
-            if (IsUnmanagedFrame(funcName))
-            {
-                funcText = $"[{_theme.RuntimeTypeColor}]{funcText}[/]";
-            }
+            var funcText = FunctionDisplayFormatter.FormatFunctionCell(entry.Name, _theme.RuntimeTypeColor);
             rows.Add(new[]
             {
                 $"[{_theme.CpuValueColor}]{waitText}[/]",
@@ -812,13 +785,12 @@ public sealed partial class ProfilerConsoleRenderer
             timeUnitLabel: "ms",
             countSuffix: "x");
         var tree = CreateCallTree(rootLabel);
-        var children = CallTreeFilters.GetVisibleChildren(
+        var children = CallTreeVisibility.GetVisibleChildren(
             rootNode,
             includeRuntime,
             useSelfTime: false,
             maxWidth,
-            siblingCutoffPercent,
-            IsRuntimeNoise);
+            siblingCutoffPercent);
         foreach (var child in children)
         {
             var (childNode, isSpecialLeaf) = AddCallTreeChildNode(
@@ -962,13 +934,12 @@ public sealed partial class ProfilerConsoleRenderer
         int maxWidth,
         int siblingCutoffPercent)
     {
-        return CallTreeFilters.GetVisibleChildren(
+        return CallTreeVisibility.GetVisibleChildren(
             node,
             includeRuntime,
             useSelfTime: false,
             maxWidth,
-            siblingCutoffPercent,
-            IsRuntimeNoise);
+            siblingCutoffPercent);
     }
 
     private Tree BuildAllocationCallTree(
@@ -1229,13 +1200,12 @@ public sealed partial class ProfilerConsoleRenderer
         {
             AddExceptionTypeNodes(tree, rootNode, exceptionTypeLimit);
         }
-        var children = CallTreeFilters.GetVisibleChildren(
+        var children = CallTreeVisibility.GetVisibleChildren(
             rootNode,
             includeRuntime,
             useSelfTime,
             maxWidth,
-            siblingCutoffPercent,
-            IsRuntimeNoise);
+            siblingCutoffPercent);
         foreach (var child in children)
         {
             var childHotness = ComputeHotness(child, rootTotal, totalSamples);
@@ -1329,13 +1299,12 @@ public sealed partial class ProfilerConsoleRenderer
 
         var basePrefix = continuationPrefix ?? prefix;
 
-        var children = CallTreeFilters.GetVisibleChildren(
+        var children = CallTreeVisibility.GetVisibleChildren(
             node,
             includeRuntime,
             useSelfTime,
             maxWidth,
-            siblingCutoffPercent,
-            IsRuntimeNoise);
+            siblingCutoffPercent);
         for (var i = 0; i < children.Count; i++)
         {
             var child = children[i];
@@ -1451,13 +1420,12 @@ public sealed partial class ProfilerConsoleRenderer
             return;
         }
 
-        var children = CallTreeFilters.GetVisibleChildren(
+        var children = CallTreeVisibility.GetVisibleChildren(
             node,
             includeRuntime,
             useSelfTime,
             maxWidth,
-            siblingCutoffPercent,
-            IsRuntimeNoise);
+            siblingCutoffPercent);
         foreach (var child in children)
         {
             var childHotness = ComputeHotness(child, totalTime, totalSamples);
@@ -1505,22 +1473,6 @@ public sealed partial class ProfilerConsoleRenderer
         }
     }
 
-    private static bool HasVisibleChildren(
-        CallTreeNode node,
-        bool includeRuntime,
-        bool useSelfTime,
-        int maxWidth,
-        int siblingCutoffPercent)
-    {
-        return CallTreeFilters.GetVisibleChildren(
-            node,
-            includeRuntime,
-            useSelfTime,
-            maxWidth,
-            siblingCutoffPercent,
-            IsRuntimeNoise).Count > 0;
-    }
-
     private (TreeNode Node, bool IsSpecialLeaf) AddCallTreeChildNode(
         Func<string, TreeNode> addNode,
         CallTreeNode child,
@@ -1540,7 +1492,7 @@ public sealed partial class ProfilerConsoleRenderer
     {
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var isLeaf = isSpecialLeaf || depth >= maxDepth ||
-                     !HasVisibleChildren(
+                     !CallTreeVisibility.HasVisibleChildren(
                          child,
                          includeRuntime,
                          useSelfTime,
