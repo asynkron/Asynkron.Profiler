@@ -160,6 +160,13 @@ public sealed class ProjectResolverTests
             SafeDeleteDirectory(root);
         }
     }
+    private static readonly string[] SolutionProjects =
+    [
+        "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src\\\\App\\\\App.csproj\", \"{11111111-1111-1111-1111-111111111111}\"",
+        "EndProject",
+        "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"Lib\", \"src\\\\Lib\\\\Lib.csproj\", \"{22222222-2222-2222-2222-222222222222}\"",
+        "EndProject"
+    ];
 
     [Fact]
     public void ResolvesSolutionExecutableProject()
@@ -175,13 +182,7 @@ public sealed class ProjectResolverTests
             File.WriteAllText(libProjectPath, "<Project />");
 
             var solutionPath = Path.Combine(root, "App.sln");
-            File.WriteAllText(solutionPath, string.Join(Environment.NewLine, new[]
-            {
-                "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src\\\\App\\\\App.csproj\", \"{11111111-1111-1111-1111-111111111111}\"",
-                "EndProject",
-                "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"Lib\", \"src\\\\Lib\\\\Lib.csproj\", \"{22222222-2222-2222-2222-222222222222}\"",
-                "EndProject"
-            }));
+            File.WriteAllText(solutionPath, string.Join(Environment.NewLine, SolutionProjects));
 
             var appTargetPath = Path.Combine(root, "src", "App", "bin", "Release", "net8.0", "App.dll");
             var libTargetPath = Path.Combine(root, "src", "Lib", "bin", "Release", "net8.0", "Lib.dll");
