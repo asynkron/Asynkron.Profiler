@@ -1754,30 +1754,45 @@ rootCommand.SetHandler(context =>
         description = resolved.Description;
     }
 
+    var renderRequest = new ProfileRenderRequest(
+        label,
+        description,
+        callTreeRoot,
+        functionFilter,
+        exceptionTypeFilter,
+        includeRuntime,
+        callTreeDepth,
+        callTreeWidth,
+        callTreeRootMode,
+        callTreeSelf,
+        callTreeSiblingCutoff,
+        hotThreshold,
+        timeline,
+        timelineWidth);
+
     void RenderCpuResults(CpuProfileResult? results, MemoryProfileResult? memoryResults = null)
     {
-        renderer.PrintCpuResults(
-            results,
-            label,
-            description,
-            callTreeRoot,
-            functionFilter,
-            includeRuntime,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeRootMode,
-            callTreeSelf,
-            callTreeSiblingCutoff,
-            hotThreshold,
-            timeline,
-            timelineWidth,
-            memoryResults: memoryResults);
+        renderer.PrintCpuResults(results, renderRequest, memoryResults);
 
         if ((jitDisasmHot || hotThresholdSpecified) && jit && results != null)
         {
-            RunHotJitDisasm(results, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
+            RunHotJitDisasm(
+                results,
+                command,
+                renderRequest.CallTreeRoot,
+                renderRequest.CallTreeRootMode,
+                renderRequest.IncludeRuntime,
+                renderRequest.HotThreshold);
         }
     }
+
+    void RenderMemoryResults(MemoryProfileResult? results) => renderer.PrintMemoryResults(results, renderRequest);
+
+    void RenderExceptionResults(ExceptionProfileResult? results) => renderer.PrintExceptionResults(results, renderRequest);
+
+    void RenderContentionResults(ContentionProfileResult? results) => renderer.PrintContentionResults(results, renderRequest);
+
+    void RenderHeapResults(HeapProfileResult? results) => renderer.PrintHeapResults(results, renderRequest);
 
     if (jitInline || jitDisasm)
     {
@@ -1882,15 +1897,7 @@ rootCommand.SetHandler(context =>
         }
         else if (memoryResults != null)
         {
-            renderer.PrintMemoryResults(
-                memoryResults,
-                label,
-                description,
-                callTreeRoot,
-                includeRuntime,
-                callTreeDepth,
-                callTreeWidth,
-                callTreeSiblingCutoff);
+            RenderMemoryResults(memoryResults);
         }
     }
     else
@@ -1914,15 +1921,7 @@ rootCommand.SetHandler(context =>
                 : sharedTraceFile != null
                     ? MemoryProfileFromInput(sharedTraceFile, label)
                     : MemoryProfileCommand(command, label);
-            renderer.PrintMemoryResults(
-                results,
-                label,
-                description,
-                callTreeRoot,
-                includeRuntime,
-                callTreeDepth,
-                callTreeWidth,
-                callTreeSiblingCutoff);
+            RenderMemoryResults(results);
         }
     }
 
@@ -1934,18 +1933,7 @@ rootCommand.SetHandler(context =>
             : sharedTraceFile != null
                 ? ExceptionProfileFromInput(sharedTraceFile, label)
                 : ExceptionProfileCommand(command, label);
-        renderer.PrintExceptionResults(
-            results,
-            label,
-            description,
-            callTreeRoot,
-            exceptionTypeFilter,
-            functionFilter,
-            includeRuntime,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeRootMode,
-            callTreeSiblingCutoff);
+        RenderExceptionResults(results);
     }
 
     if (runContention)
@@ -1954,17 +1942,7 @@ rootCommand.SetHandler(context =>
         var results = hasInput
             ? ContentionProfileFromInput(inputPath!, label)
             : ContentionProfileCommand(command, label);
-        renderer.PrintContentionResults(
-            results,
-            label,
-            description,
-            callTreeRoot,
-            functionFilter,
-            includeRuntime,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeRootMode,
-            callTreeSiblingCutoff);
+        RenderContentionResults(results);
     }
 
     if (runHeap)
@@ -1973,7 +1951,7 @@ rootCommand.SetHandler(context =>
         var results = hasInput
             ? HeapProfileFromInput(inputPath!)
             : HeapProfileCommand(command, label);
-        renderer.PrintHeapResults(results, label, description);
+        RenderHeapResults(results);
     }
 });
 
