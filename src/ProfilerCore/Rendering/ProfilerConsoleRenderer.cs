@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
+using static Asynkron.Profiler.CallTreeHelpers;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -847,14 +848,14 @@ public sealed partial class ProfilerConsoleRenderer
         AnsiConsole.Write(BuildTableWithRows(columns, rows, title, hideHeaders, headerColor));
     }
 
-    private static IRenderable BuildTableBlock(Table table, string title, string color)
+    private static Rows BuildTableBlock(Table table, string title, string color)
     {
         return new Rows(
             new Markup($"[{color}]{Markup.Escape(title)}[/]"),
             table);
     }
 
-    private IRenderable BuildContentionCallTree(
+    private Rows BuildContentionCallTree(
         ContentionProfileResult results,
         string? rootFilter,
         bool includeRuntime,
@@ -955,7 +956,7 @@ public sealed partial class ProfilerConsoleRenderer
             tree);
     }
 
-    private IRenderable BuildExceptionCallTree(
+    private Rows BuildExceptionCallTree(
         CallTreeNode callTreeRoot,
         long totalCount,
         string title,
@@ -1032,7 +1033,7 @@ public sealed partial class ProfilerConsoleRenderer
             tree);
     }
 
-    private IRenderable BuildAllocationCallTree(
+    private Tree BuildAllocationCallTree(
         AllocationCallTreeNode root,
         bool includeRuntime,
         int maxDepth,
@@ -1051,7 +1052,7 @@ public sealed partial class ProfilerConsoleRenderer
             var isSpecialLeaf = ShouldStopAtLeaf(FormatFunctionDisplayName(child.Name));
             var childChildren = !isSpecialLeaf
                 ? GetVisibleAllocationChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
-                : Array.Empty<AllocationCallTreeNode>();
+                : new List<AllocationCallTreeNode>();
             var isLeaf = isSpecialLeaf || maxDepth <= 1 || childChildren.Count == 0;
 
             var childNode = tree.AddNode(FormatAllocationCallTreeLine(child, root.TotalBytes, isRoot: false, isLeaf));
@@ -1094,7 +1095,7 @@ public sealed partial class ProfilerConsoleRenderer
             var isSpecialLeaf = ShouldStopAtLeaf(FormatFunctionDisplayName(child.Name));
             var childChildren = !isSpecialLeaf && nextDepth <= maxDepth
                 ? GetVisibleAllocationChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
-                : Array.Empty<AllocationCallTreeNode>();
+                : new List<AllocationCallTreeNode>();
             var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
 
             var childNode = parent.AddNode(FormatAllocationCallTreeLine(child, rootTotalBytes, isRoot: false, isLeaf));
@@ -1113,7 +1114,7 @@ public sealed partial class ProfilerConsoleRenderer
         }
     }
 
-    private IReadOnlyList<AllocationCallTreeNode> GetVisibleAllocationChildren(
+    private static List<AllocationCallTreeNode> GetVisibleAllocationChildren(
         AllocationCallTreeNode node,
         bool includeRuntime,
         int maxWidth,
@@ -1146,7 +1147,7 @@ public sealed partial class ProfilerConsoleRenderer
             .ToList();
     }
 
-    private IEnumerable<AllocationCallTreeNode> EnumerateVisibleAllocationChildren(
+    private static IEnumerable<AllocationCallTreeNode> EnumerateVisibleAllocationChildren(
         AllocationCallTreeNode node,
         bool includeRuntime)
     {
@@ -1191,7 +1192,7 @@ public sealed partial class ProfilerConsoleRenderer
         return $"[{_theme.CpuValueColor}]{bytesText}[/] [{_theme.SampleColor}]{pctText}%[/] [{_theme.CpuCountColor}]{countText}x[/] {nameText}";
     }
 
-    private IRenderable BuildCallTree(
+    private Rows BuildCallTree(
         CpuProfileResult results,
         bool useSelfTime,
         string? rootFilter,
@@ -1911,97 +1912,11 @@ public sealed partial class ProfilerConsoleRenderer
         return $"[{_theme.CpuValueColor}]{countText}x[/] [{_theme.SampleColor}]{pctText}%[/] {nameText}";
     }
 
-    private static double GetCallTreeTime(CallTreeNode node, bool useSelfTime) => useSelfTime ? node.Self : node.Total;
-
-    private static double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
-    {
-        if (totalTime <= 0 || totalSamples <= 0)
-        {
-            return 0;
-        }
-
-        var sampleRatio = node.Calls / totalSamples;
-        var selfRatio = node.Self / totalTime;
-        return sampleRatio * selfRatio;
-    }
-
     private static bool IsFireEmojiCandidate(double hotness, double hotThreshold) => hotness >= hotThreshold;
-
-    private static List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
-    {
-        var matches = new List<CallTreeMatch>();
-        var normalizedFilter = filter.Trim();
-        if (normalizedFilter.Length == 0)
-        {
-            return matches;
-        }
-
-        var order = 0;
-        void Visit(CallTreeNode current, int depth)
-        {
-            if (current.FrameIdx >= 0)
-            {
-                var displayName = FormatFunctionDisplayName(current.Name);
-                if (displayName.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase) ||
-                    current.Name.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase))
-                {
-                    matches.Add(new CallTreeMatch(current, depth, order++));
-                }
-            }
-
-            foreach (var child in current.Children.Values)
-            {
-                Visit(child, depth + 1);
-            }
-        }
-
-        Visit(node, 0);
-        return matches;
-    }
 
     private static string? ResolveCallTreeRootFilter(string? rootFilter)
     {
         return string.IsNullOrWhiteSpace(rootFilter) ? null : rootFilter;
-    }
-
-    private CallTreeNode SelectRootMatch(List<CallTreeMatch> matches, bool includeRuntime, string? rootMode)
-    {
-        if (matches.Count == 0)
-        {
-            throw new InvalidOperationException("No call tree matches available.");
-        }
-
-        var mode = NormalizeRootMode(rootMode);
-        var candidates = includeRuntime
-            ? matches
-            : matches.Where(match => !IsRuntimeNoise(match.Node.Name)).ToList();
-        if (candidates.Count == 0)
-        {
-            candidates = matches;
-        }
-
-        return mode switch
-        {
-            "first" or "shallowest" => candidates
-                .OrderBy(match => match.Depth)
-                .ThenBy(match => match.Order)
-                .Select(match => match.Node)
-                .First(),
-            _ => candidates
-                .OrderByDescending(match => GetCallTreeTime(match.Node, useSelfTime: false))
-                .Select(match => match.Node)
-                .First()
-        };
-    }
-
-    private static string NormalizeRootMode(string? rootMode)
-    {
-        if (string.IsNullOrWhiteSpace(rootMode))
-        {
-            return "hottest";
-        }
-
-        return rootMode.Trim().ToLowerInvariant();
     }
 
     private Table? BuildAllocationTable(IReadOnlyList<AllocationEntry> entries, string? allocationTotal)
@@ -2069,26 +1984,6 @@ public sealed partial class ProfilerConsoleRenderer
         AnsiConsole.Write(table);
     }
 
-    private static string FormatBytes(long bytes)
-    {
-        if (bytes < 1024)
-        {
-            return bytes.ToString(CultureInfo.InvariantCulture) + " B";
-        }
-
-        if (bytes < 1024 * 1024)
-        {
-            return (bytes / 1024d).ToString("F2", CultureInfo.InvariantCulture) + " KB";
-        }
-
-        if (bytes < 1024L * 1024L * 1024L)
-        {
-            return (bytes / (1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " MB";
-        }
-
-        return (bytes / (1024d * 1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " GB";
-    }
-
     private static string FormatCpuTime(double value, string timeUnitLabel)
     {
         if (string.Equals(timeUnitLabel, "samples", StringComparison.OrdinalIgnoreCase))
@@ -2102,37 +1997,6 @@ public sealed partial class ProfilerConsoleRenderer
         return value.ToString("F2", CultureInfo.InvariantCulture);
     }
 
-    private static bool IsUnmanagedFrame(string name)
-    {
-        var trimmed = name?.Trim() ?? string.Empty;
-        if (trimmed.Length == 0)
-        {
-            return false;
-        }
-
-        if (trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Contains("Unmanaged Code", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        foreach (var ch in trimmed)
-        {
-            if (char.IsLetter(ch))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static string FormatFunctionDisplayName(string rawName)
-    {
-        var formatted = NameFormatter.FormatMethodDisplayName(rawName);
-        return GetCallTreeDisplayName(formatted);
-    }
-
     private string FormatCallTreeName(string displayName, string matchName, bool isLeaf, string? nameColorOverride = null)
     {
         var escaped = Markup.Escape(displayName);
@@ -2143,38 +2007,6 @@ public sealed partial class ProfilerConsoleRenderer
 
         var color = string.IsNullOrWhiteSpace(nameColorOverride) ? _theme.TextColor : nameColorOverride;
         return $"[{color}]{escaped}[/]";
-    }
-
-    private static string GetCallTreeMatchName(CallTreeNode node)
-    {
-        return NameFormatter.FormatMethodDisplayName(node.Name);
-    }
-
-    private static string GetCallTreeDisplayName(string matchName)
-    {
-        if (IsUnmanagedFrame(matchName))
-        {
-            return "Unmanaged Code";
-        }
-
-        return matchName;
-    }
-
-    private static bool ShouldStopAtLeaf(string matchName)
-    {
-        return IsUnmanagedFrame(matchName) ||
-               matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
-               matchName.Contains("Array.Copy", StringComparison.Ordinal) ||
-               matchName.Contains("Dictionary<__Canon,__Canon>.Resize", StringComparison.Ordinal) ||
-               matchName.Contains("Buffer.BulkMoveWithWriteBarrier", StringComparison.Ordinal) ||
-               matchName.Contains("SpanHelpers.SequenceEqual", StringComparison.Ordinal) ||
-               matchName.Contains("HashSet<", StringComparison.Ordinal) ||
-               matchName.Contains("Enumerable+ArrayWhereSelectIterator<", StringComparison.Ordinal) ||
-               matchName.Contains("ImmutableDictionary<", StringComparison.Ordinal) ||
-               matchName.Contains("SegmentedArrayBuilder<__Canon>.ToArray", StringComparison.Ordinal) ||
-               matchName.Contains("__Canon", StringComparison.Ordinal) ||
-               (matchName.Contains("List<", StringComparison.Ordinal) &&
-                matchName.EndsWith(".ToArray", StringComparison.Ordinal));
     }
 
     private static bool MatchesFunctionFilter(string name, string? filter)
@@ -2223,31 +2055,6 @@ public sealed partial class ProfilerConsoleRenderer
 
         return null;
     }
-
-    private bool IsRuntimeNoise(string name)
-    {
-        var trimmed = name.TrimStart();
-        var formatted = FormatFunctionDisplayName(trimmed);
-        return IsUnmanagedFrame(trimmed) ||
-               trimmed.Contains("(Non-Activities)", StringComparison.Ordinal) ||
-               trimmed.Contains("Thread", StringComparison.Ordinal) ||
-               trimmed.Contains("Threads", StringComparison.Ordinal) ||
-               trimmed.Contains("Process", StringComparison.Ordinal) ||
-               StartsWithDigits(trimmed) ||
-               StartsWithDigits(formatted);
-    }
-
-    private static bool StartsWithDigits(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return false;
-        }
-
-        var trimmed = name.TrimStart();
-        return trimmed.Length > 0 && char.IsDigit(trimmed[0]);
-    }
-
     private static string WrapAnsi(string text, string? color)
     {
         if (string.IsNullOrWhiteSpace(color))

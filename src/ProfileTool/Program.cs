@@ -8,15 +8,15 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using static Asynkron.Profiler.CallTreeHelpers;
 using Asynkron.Profiler;
 using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
-using Spectre.Console.Rendering;
 
 const double HotnessFireThreshold = 0.4d;
 var jitNumberRegex = MyRegex();
+var versionProbeArgs = new[] { "--version" };
 var theme = Theme.Current;
-var treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
 var renderer = new ProfilerConsoleRenderer(theme);
 
 void PrintSection(string text, string? color = null)
@@ -29,20 +29,6 @@ void PrintSection(string text, string? color = null)
     }
 
     AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(text)}[/]");
-}
-
-Color ParseColor(string hex)
-{
-    if (string.IsNullOrWhiteSpace(hex))
-    {
-        return Color.Default;
-    }
-
-    var value = Convert.ToInt32(hex.TrimStart('#'), 16);
-    return new Color(
-        (byte)((value >> 16) & 0xFF),
-        (byte)((value >> 8) & 0xFF),
-        (byte)(value & 0xFF));
 }
 
 bool TryParseHexColor(string value, out (byte R, byte G, byte B) rgb)
@@ -87,7 +73,6 @@ bool TryApplyTheme(string? themeName)
 
     Theme.Current = selectedTheme;
     theme = selectedTheme;
-    treeGuideStyle = new Style(ParseColor(theme.TreeGuideColor));
     renderer = new ProfilerConsoleRenderer(theme);
     return true;
 }
@@ -288,7 +273,7 @@ bool EnsureToolAvailable(string toolName, string installHint)
         return cached;
     }
 
-    var (success, _, stderr) = RunProcess(toolName, new[] { "--version" }, timeoutMs: 10000);
+    var (success, _, stderr) = RunProcess(toolName, versionProbeArgs, timeoutMs: 10000);
     if (!success)
     {
         var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
@@ -584,32 +569,7 @@ MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
         return null;
     }
 
-    var allocationEntries = callTree.TypeRoots
-        .OrderByDescending(root => root.TotalBytes)
-        .Take(50)
-        .Select(root => new AllocationEntry(root.Name, root.Count, FormatBytes(root.TotalBytes)))
-        .ToList();
-
-    var totalAllocated = FormatBytes(callTree.TotalBytes);
-
-    return new MemoryProfileResult(
-        null,
-        null,
-        null,
-        totalAllocated,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        totalAllocated,
-        allocationEntries,
-        callTree,
-        null,
-        null);
+    return BuildMemoryProfileResult(callTree);
 }
 
 MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
@@ -633,32 +593,7 @@ MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
         return null;
     }
 
-    var allocationEntries = callTree.TypeRoots
-        .OrderByDescending(root => root.TotalBytes)
-        .Take(50)
-        .Select(root => new AllocationEntry(root.Name, root.Count, FormatBytes(root.TotalBytes)))
-        .ToList();
-
-    var totalAllocated = FormatBytes(callTree.TotalBytes);
-
-    return new MemoryProfileResult(
-        null,
-        null,
-        null,
-        totalAllocated,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        totalAllocated,
-        allocationEntries,
-        callTree,
-        null,
-        null);
+    return BuildMemoryProfileResult(callTree);
 }
 
 ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
@@ -816,142 +751,6 @@ AllocationCallTreeResult? AnalyzeAllocationTrace(string traceFile)
     }
 }
 
-void AddAllocationCallTreeChildren(
-    TreeNode parent,
-    AllocationCallTreeNode node,
-    long rootTotalBytes,
-    bool includeRuntime,
-    int depth,
-    int maxDepth,
-    int maxWidth,
-    int siblingCutoffPercent)
-{
-    if (depth > maxDepth)
-    {
-        return;
-    }
-
-    var children = GetVisibleAllocationChildren(node, includeRuntime, maxWidth, siblingCutoffPercent);
-    foreach (var child in children)
-    {
-        var nextDepth = depth + 1;
-        var isSpecialLeaf = ShouldStopAtLeaf(FormatFunctionDisplayName(child.Name));
-        var childChildren = !isSpecialLeaf && nextDepth <= maxDepth
-            ? GetVisibleAllocationChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
-            : Array.Empty<AllocationCallTreeNode>();
-        var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
-
-        var childNode = parent.AddNode(FormatAllocationCallTreeLine(child, rootTotalBytes, isRoot: false, isLeaf));
-        if (!isSpecialLeaf)
-        {
-            AddAllocationCallTreeChildren(
-                childNode,
-                child,
-                rootTotalBytes,
-                includeRuntime,
-                nextDepth,
-                maxDepth,
-                maxWidth,
-                siblingCutoffPercent);
-        }
-    }
-}
-
-IReadOnlyList<AllocationCallTreeNode> GetVisibleAllocationChildren(
-    AllocationCallTreeNode node,
-    bool includeRuntime,
-    int maxWidth,
-    int siblingCutoffPercent)
-{
-    var ordered = EnumerateVisibleAllocationChildren(node, includeRuntime)
-        .OrderByDescending(child => child.TotalBytes)
-        .ToList();
-
-    if (ordered.Count == 0)
-    {
-        return ordered;
-    }
-
-    if (siblingCutoffPercent <= 0)
-    {
-        return ordered.Take(maxWidth).ToList();
-    }
-
-    var topBytes = ordered[0].TotalBytes;
-    if (topBytes <= 0)
-    {
-        return ordered.Take(maxWidth).ToList();
-    }
-
-    var minBytes = topBytes * siblingCutoffPercent / 100d;
-    return ordered
-        .Where(child => child.TotalBytes >= minBytes)
-        .Take(maxWidth)
-        .ToList();
-}
-
-IEnumerable<AllocationCallTreeNode> EnumerateVisibleAllocationChildren(
-    AllocationCallTreeNode node,
-    bool includeRuntime)
-{
-    foreach (var child in node.Children.Values)
-    {
-        if (includeRuntime || !IsRuntimeNoise(child.Name))
-        {
-            yield return child;
-            continue;
-        }
-
-        foreach (var grandChild in EnumerateVisibleAllocationChildren(child, includeRuntime))
-        {
-            yield return grandChild;
-        }
-    }
-}
-
-string FormatAllocationCallTreeLine(
-    AllocationCallTreeNode node,
-    long rootTotalBytes,
-    bool isRoot,
-    bool isLeaf)
-{
-    var bytes = node.TotalBytes;
-    var pct = rootTotalBytes > 0 ? 100d * bytes / rootTotalBytes : 0d;
-    var count = node.Count;
-    var bytesText = FormatBytes(bytes);
-    var pctText = pct.ToString("F1", CultureInfo.InvariantCulture);
-    var countText = count.ToString("N0", CultureInfo.InvariantCulture);
-
-    var displayName = isRoot ? NameFormatter.FormatTypeDisplayName(node.Name) : FormatFunctionDisplayName(node.Name);
-    if (displayName.Length > 80)
-    {
-        displayName = displayName[..77] + "...";
-    }
-
-    var nameText = isRoot
-        ? $"[{theme.TextColor}]{Markup.Escape(displayName)}[/]"
-        : FormatCallTreeName(displayName, displayName, isLeaf);
-
-    return $"[{theme.CpuValueColor}]{bytesText}[/] [{theme.SampleColor}]{pctText}%[/] [{theme.CpuCountColor}]{countText}x[/] {nameText}";
-}
-
-double GetCallTreeTime(CallTreeNode node, bool useSelfTime)
-{
-    return useSelfTime ? node.Self : node.Total;
-}
-
-double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
-{
-    if (totalTime <= 0 || totalSamples <= 0)
-    {
-        return 0;
-    }
-
-    var sampleRatio = node.Calls / totalSamples;
-    var selfRatio = node.Self / totalTime;
-    return sampleRatio * selfRatio;
-}
-
 bool TryParseHotThreshold(string? input, out double value)
 {
     value = HotnessFireThreshold;
@@ -974,269 +773,34 @@ bool TryParseHotThreshold(string? input, out double value)
     return false;
 }
 
-IReadOnlyList<(string Filter, string DisplayName, double Hotness)> CollectHotMethods(
-    CallTreeNode rootNode,
-    double totalTime,
-    double totalSamples,
-    bool includeRuntime,
-    double hotThreshold)
+MemoryProfileResult BuildMemoryProfileResult(AllocationCallTreeResult callTree)
 {
-    var hotMethods = new Dictionary<string, (string DisplayName, double Hotness)>(StringComparer.OrdinalIgnoreCase);
-    if (totalTime <= 0 || totalSamples <= 0)
-    {
-        return Array.Empty<(string Filter, string DisplayName, double Hotness)>();
-    }
-
-    void Visit(CallTreeNode node)
-    {
-        if (node.FrameIdx >= 0 &&
-            (includeRuntime || !IsRuntimeNoise(node.Name)))
-        {
-            var matchName = GetCallTreeMatchName(node);
-            if (!IsUnmanagedFrame(matchName))
-            {
-                var hotness = ComputeHotness(node, totalTime, totalSamples);
-                if (hotness >= hotThreshold)
-                {
-                    var filterName = BuildJitMethodFilter(node.Name);
-                    if (!hotMethods.TryGetValue(filterName, out var existing) || hotness > existing.Hotness)
-                    {
-                        hotMethods[filterName] = (matchName, hotness);
-                    }
-                }
-            }
-        }
-
-        foreach (var child in node.Children.Values)
-        {
-            Visit(child);
-        }
-    }
-
-    Visit(rootNode);
-
-    return hotMethods
-        .Select(entry => (Filter: entry.Key, DisplayName: entry.Value.DisplayName, Hotness: entry.Value.Hotness))
-        .OrderByDescending(entry => entry.Hotness)
-        .ThenBy(entry => entry.DisplayName, StringComparer.OrdinalIgnoreCase)
+    var allocationEntries = callTree.TypeRoots
+        .OrderByDescending(root => root.TotalBytes)
+        .Take(50)
+        .Select(root => new AllocationEntry(root.Name, root.Count, FormatBytes(root.TotalBytes)))
         .ToList();
-}
 
-List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
-{
-    var matches = new List<CallTreeMatch>();
-    var normalizedFilter = filter.Trim();
-    if (normalizedFilter.Length == 0)
-    {
-        return matches;
-    }
+    var totalAllocated = FormatBytes(callTree.TotalBytes);
 
-    var order = 0;
-    void Visit(CallTreeNode current, int depth)
-    {
-        if (current.FrameIdx >= 0)
-        {
-            var displayName = FormatFunctionDisplayName(current.Name);
-            if (displayName.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase) ||
-                current.Name.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase))
-            {
-                matches.Add(new CallTreeMatch(current, depth, order++));
-            }
-        }
-
-        foreach (var child in current.Children.Values)
-        {
-            Visit(child, depth + 1);
-        }
-    }
-
-    Visit(node, 0);
-    return matches;
-}
-
-CallTreeNode SelectRootMatch(List<CallTreeMatch> matches, bool includeRuntime, string? rootMode)
-{
-    if (matches.Count == 0)
-    {
-        throw new InvalidOperationException("No call tree matches available.");
-    }
-
-    var mode = NormalizeRootMode(rootMode);
-    var candidates = includeRuntime
-        ? matches
-        : matches.Where(match => !IsRuntimeNoise(match.Node.Name)).ToList();
-    if (candidates.Count == 0)
-    {
-        candidates = matches;
-    }
-
-    return mode switch
-    {
-        "first" or "shallowest" => candidates
-            .OrderBy(match => match.Depth)
-            .ThenBy(match => match.Order)
-            .Select(match => match.Node)
-            .First(),
-        _ => candidates
-            .OrderByDescending(match => GetCallTreeTime(match.Node, useSelfTime: false))
-            .Select(match => match.Node)
-            .First()
-    };
-}
-
-string NormalizeRootMode(string? rootMode)
-{
-    if (string.IsNullOrWhiteSpace(rootMode))
-    {
-        return "hottest";
-    }
-
-    return rootMode.Trim().ToLowerInvariant();
-}
-
-string FormatBytes(long bytes)
-{
-    if (bytes < 1024)
-    {
-        return bytes.ToString(CultureInfo.InvariantCulture) + " B";
-    }
-
-    if (bytes < 1024 * 1024)
-    {
-        return (bytes / 1024d).ToString("F2", CultureInfo.InvariantCulture) + " KB";
-    }
-
-    if (bytes < 1024L * 1024L * 1024L)
-    {
-        return (bytes / (1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " MB";
-    }
-
-    return (bytes / (1024d * 1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " GB";
-}
-
-bool IsUnmanagedFrame(string name)
-{
-    var trimmed = name?.Trim() ?? string.Empty;
-    if (trimmed.Length == 0)
-    {
-        return false;
-    }
-
-    if (trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.OrdinalIgnoreCase) ||
-        trimmed.Contains("Unmanaged Code", StringComparison.OrdinalIgnoreCase))
-    {
-        return true;
-    }
-
-    foreach (var ch in trimmed)
-    {
-        if (char.IsLetter(ch))
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-string FormatFunctionDisplayName(string rawName)
-{
-    var formatted = NameFormatter.FormatMethodDisplayName(rawName);
-    return GetCallTreeDisplayName(formatted);
-}
-
-string FormatCallTreeName(string displayName, string matchName, bool isLeaf, string? nameColorOverride = null)
-{
-    var escaped = Markup.Escape(displayName);
-    if (isLeaf && ShouldStopAtLeaf(matchName))
-    {
-        return $"[{theme.LeafHighlightColor}]{escaped}[/]";
-    }
-
-    var color = string.IsNullOrWhiteSpace(nameColorOverride) ? theme.TextColor : nameColorOverride;
-    return $"[{color}]{escaped}[/]";
-}
-
-string GetCallTreeMatchName(CallTreeNode node)
-{
-    return NameFormatter.FormatMethodDisplayName(node.Name);
-}
-
-string GetCallTreeDisplayName(string matchName)
-{
-    if (IsUnmanagedFrame(matchName))
-    {
-        return "Unmanaged Code";
-    }
-
-    return matchName;
-}
-
-string BuildJitMethodFilter(string rawName)
-{
-    if (string.IsNullOrWhiteSpace(rawName))
-    {
-        return rawName;
-    }
-
-    var trimmed = rawName.Trim();
-    var paramIndex = trimmed.IndexOf('(');
-    if (paramIndex >= 0)
-    {
-        trimmed = trimmed[..paramIndex];
-    }
-
-    trimmed = trimmed.Trim();
-    trimmed = trimmed.Replace('+', '.');
-
-    var lastDot = trimmed.LastIndexOf('.');
-    if (lastDot > 0 && lastDot < trimmed.Length - 1)
-    {
-        return $"{trimmed[..lastDot]}:{trimmed[(lastDot + 1)..]}";
-    }
-
-    return trimmed;
-}
-
-bool ShouldStopAtLeaf(string matchName)
-{
-    return IsUnmanagedFrame(matchName) ||
-           matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
-           matchName.Contains("Array.Copy", StringComparison.Ordinal) ||
-           matchName.Contains("Dictionary<__Canon,__Canon>.Resize", StringComparison.Ordinal) ||
-           matchName.Contains("Buffer.BulkMoveWithWriteBarrier", StringComparison.Ordinal) ||
-           matchName.Contains("SpanHelpers.SequenceEqual", StringComparison.Ordinal) ||
-           matchName.Contains("HashSet<", StringComparison.Ordinal) ||
-           matchName.Contains("Enumerable+ArrayWhereSelectIterator<", StringComparison.Ordinal) ||
-           matchName.Contains("ImmutableDictionary<", StringComparison.Ordinal) ||
-           matchName.Contains("SegmentedArrayBuilder<__Canon>.ToArray", StringComparison.Ordinal) ||
-           matchName.Contains("__Canon", StringComparison.Ordinal) ||
-           (matchName.Contains("List<", StringComparison.Ordinal) &&
-            matchName.EndsWith(".ToArray", StringComparison.Ordinal));
-}
-
-bool IsRuntimeNoise(string name)
-{
-    var trimmed = name.TrimStart();
-    var formatted = FormatFunctionDisplayName(trimmed);
-    return IsUnmanagedFrame(trimmed) ||
-           trimmed.Contains("(Non-Activities)", StringComparison.Ordinal) ||
-           trimmed.Contains("Thread", StringComparison.Ordinal) ||
-           trimmed.Contains("Threads", StringComparison.Ordinal) ||
-           trimmed.Contains("Process", StringComparison.Ordinal) ||
-           StartsWithDigits(trimmed) ||
-           StartsWithDigits(formatted);
-}
-
-bool StartsWithDigits(string name)
-{
-    if (string.IsNullOrWhiteSpace(name))
-    {
-        return false;
-    }
-
-    var trimmed = name.TrimStart();
-    return trimmed.Length > 0 && char.IsDigit(trimmed[0]);
+    return new MemoryProfileResult(
+        null,
+        null,
+        null,
+        totalAllocated,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        totalAllocated,
+        allocationEntries,
+        callTree,
+        null,
+        null);
 }
 
 HeapProfileResult? HeapProfileCommand(string[] command, string label)
