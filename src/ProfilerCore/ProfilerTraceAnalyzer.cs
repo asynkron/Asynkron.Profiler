@@ -35,7 +35,7 @@ public sealed class ProfilerTraceAnalyzer
 
     public string OutputDirectory { get; }
 
-    public CpuProfileResult AnalyzeSpeedscope(string speedscopePath)
+    public static CpuProfileResult AnalyzeSpeedscope(string speedscopePath)
     {
         if (string.IsNullOrWhiteSpace(speedscopePath))
         {

@@ -8,7 +8,7 @@ using Spectre.Console.Rendering;
 
 namespace Asynkron.Profiler;
 
-public sealed class ProfilerConsoleRenderer
+public sealed partial class ProfilerConsoleRenderer
 {
     private const int AllocationTypeLimit = 3;
     private const int ExceptionTypeLimit = 3;
@@ -20,9 +20,7 @@ public sealed class ProfilerConsoleRenderer
 
     private readonly Theme _theme;
     private Style _treeGuideStyle;
-    private readonly Regex _jitNumberRegex = new(
-        @"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])",
-        RegexOptions.Compiled);
+    private readonly Regex _jitNumberRegex = MyRegex();
 
     public ProfilerConsoleRenderer(Theme? theme = null)
     {
@@ -687,7 +685,7 @@ public sealed class ProfilerConsoleRenderer
         AnsiConsole.Write(tree);
     }
 
-    private void PrintSection(string text, string? color = null)
+    private static void PrintSection(string text, string? color = null)
     {
         Console.WriteLine();
         if (string.IsNullOrWhiteSpace(color))
@@ -699,7 +697,7 @@ public sealed class ProfilerConsoleRenderer
         AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(text)}[/]");
     }
 
-    private Color ParseColor(string hex)
+    private static Color ParseColor(string hex)
     {
         if (string.IsNullOrWhiteSpace(hex))
         {
@@ -713,7 +711,7 @@ public sealed class ProfilerConsoleRenderer
             (byte)(value & 0xFF));
     }
 
-    private bool TryParseHexColor(string value, out (byte R, byte G, byte B) rgb)
+    private static bool TryParseHexColor(string value, out (byte R, byte G, byte B) rgb)
     {
         rgb = default;
         if (string.IsNullOrWhiteSpace(value))
@@ -722,7 +720,7 @@ public sealed class ProfilerConsoleRenderer
         }
 
         var trimmed = value.Trim();
-        if (trimmed.StartsWith("#", StringComparison.Ordinal))
+        if (trimmed.StartsWith('#'))
         {
             trimmed = trimmed[1..];
         }
@@ -743,7 +741,7 @@ public sealed class ProfilerConsoleRenderer
         return true;
     }
 
-    private string InterpolateColor((byte R, byte G, byte B) start, (byte R, byte G, byte B) end, double t)
+    private static string InterpolateColor((byte R, byte G, byte B) start, (byte R, byte G, byte B) end, double t)
     {
         t = Math.Clamp(t, 0d, 1d);
         var r = (byte)Math.Round(start.R + (end.R - start.R) * t);
@@ -788,7 +786,7 @@ public sealed class ProfilerConsoleRenderer
         return InterpolateColor(cool, hot, normalizedHotness);
     }
 
-    private Table BuildTable(
+    private static Table BuildTable(
         IReadOnlyList<TableColumnSpec> columns,
         string? title = null,
         bool hideHeaders = false,
@@ -823,7 +821,7 @@ public sealed class ProfilerConsoleRenderer
         return table;
     }
 
-    private Table BuildTableWithRows(
+    private static Table BuildTableWithRows(
         IReadOnlyList<TableColumnSpec> columns,
         IEnumerable<IReadOnlyList<string>> rows,
         string? title = null,
@@ -839,7 +837,7 @@ public sealed class ProfilerConsoleRenderer
         return table;
     }
 
-    private void WriteTable(
+    private static void WriteTable(
         IReadOnlyList<TableColumnSpec> columns,
         IEnumerable<IReadOnlyList<string>> rows,
         string? title = null,
@@ -849,7 +847,7 @@ public sealed class ProfilerConsoleRenderer
         AnsiConsole.Write(BuildTableWithRows(columns, rows, title, hideHeaders, headerColor));
     }
 
-    private IRenderable BuildTableBlock(Table table, string title, string color)
+    private static IRenderable BuildTableBlock(Table table, string title, string color)
     {
         return new Rows(
             new Markup($"[{color}]{Markup.Escape(title)}[/]"),
@@ -1769,7 +1767,7 @@ public sealed class ProfilerConsoleRenderer
         return baseLine;
     }
 
-    private int EstimateVisibleLength(string markup)
+    private static int EstimateVisibleLength(string markup)
     {
         var result = markup;
         while (true)
@@ -1783,7 +1781,7 @@ public sealed class ProfilerConsoleRenderer
         return result.Length;
     }
 
-    private string RenderTimelineBar(CallTreeNode node, TimelineContext ctx)
+    private static string RenderTimelineBar(CallTreeNode node, TimelineContext ctx)
     {
         if (!node.HasTiming || ctx.RootDuration <= 0)
         {
@@ -1831,7 +1829,7 @@ public sealed class ProfilerConsoleRenderer
         return $"[{color}]{new string(buffer)}[/]";
     }
 
-    private string GetHeatColor(double percentage)
+    private static string GetHeatColor(double percentage)
     {
         percentage = Math.Clamp(percentage, 0, 100);
 
@@ -1861,7 +1859,7 @@ public sealed class ProfilerConsoleRenderer
         return $"rgb({r},{g},{b})";
     }
 
-    private char SelectLeftBlock(double fraction)
+    private static char SelectLeftBlock(double fraction)
     {
         return fraction switch
         {
@@ -1877,7 +1875,7 @@ public sealed class ProfilerConsoleRenderer
         };
     }
 
-    private char SelectRightBlock(double fraction)
+    private static char SelectRightBlock(double fraction)
     {
         return fraction switch
         {
@@ -1913,9 +1911,9 @@ public sealed class ProfilerConsoleRenderer
         return $"[{_theme.CpuValueColor}]{countText}x[/] [{_theme.SampleColor}]{pctText}%[/] {nameText}";
     }
 
-    private double GetCallTreeTime(CallTreeNode node, bool useSelfTime) => useSelfTime ? node.Self : node.Total;
+    private static double GetCallTreeTime(CallTreeNode node, bool useSelfTime) => useSelfTime ? node.Self : node.Total;
 
-    private double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
+    private static double ComputeHotness(CallTreeNode node, double totalTime, double totalSamples)
     {
         if (totalTime <= 0 || totalSamples <= 0)
         {
@@ -1927,9 +1925,9 @@ public sealed class ProfilerConsoleRenderer
         return sampleRatio * selfRatio;
     }
 
-    private bool IsFireEmojiCandidate(double hotness, double hotThreshold) => hotness >= hotThreshold;
+    private static bool IsFireEmojiCandidate(double hotness, double hotThreshold) => hotness >= hotThreshold;
 
-    private List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
+    private static List<CallTreeMatch> FindCallTreeMatches(CallTreeNode node, string filter)
     {
         var matches = new List<CallTreeMatch>();
         var normalizedFilter = filter.Trim();
@@ -1961,7 +1959,7 @@ public sealed class ProfilerConsoleRenderer
         return matches;
     }
 
-    private string? ResolveCallTreeRootFilter(string? rootFilter)
+    private static string? ResolveCallTreeRootFilter(string? rootFilter)
     {
         return string.IsNullOrWhiteSpace(rootFilter) ? null : rootFilter;
     }
@@ -1996,7 +1994,7 @@ public sealed class ProfilerConsoleRenderer
         };
     }
 
-    private string NormalizeRootMode(string? rootMode)
+    private static string NormalizeRootMode(string? rootMode)
     {
         if (string.IsNullOrWhiteSpace(rootMode))
         {
@@ -2071,7 +2069,7 @@ public sealed class ProfilerConsoleRenderer
         AnsiConsole.Write(table);
     }
 
-    private string FormatBytes(long bytes)
+    private static string FormatBytes(long bytes)
     {
         if (bytes < 1024)
         {
@@ -2091,7 +2089,7 @@ public sealed class ProfilerConsoleRenderer
         return (bytes / (1024d * 1024d * 1024d)).ToString("F2", CultureInfo.InvariantCulture) + " GB";
     }
 
-    private string FormatCpuTime(double value, string timeUnitLabel)
+    private static string FormatCpuTime(double value, string timeUnitLabel)
     {
         if (string.Equals(timeUnitLabel, "samples", StringComparison.OrdinalIgnoreCase))
         {
@@ -2104,7 +2102,7 @@ public sealed class ProfilerConsoleRenderer
         return value.ToString("F2", CultureInfo.InvariantCulture);
     }
 
-    private bool IsUnmanagedFrame(string name)
+    private static bool IsUnmanagedFrame(string name)
     {
         var trimmed = name?.Trim() ?? string.Empty;
         if (trimmed.Length == 0)
@@ -2129,7 +2127,7 @@ public sealed class ProfilerConsoleRenderer
         return true;
     }
 
-    private string FormatFunctionDisplayName(string rawName)
+    private static string FormatFunctionDisplayName(string rawName)
     {
         var formatted = NameFormatter.FormatMethodDisplayName(rawName);
         return GetCallTreeDisplayName(formatted);
@@ -2147,12 +2145,12 @@ public sealed class ProfilerConsoleRenderer
         return $"[{color}]{escaped}[/]";
     }
 
-    private string GetCallTreeMatchName(CallTreeNode node)
+    private static string GetCallTreeMatchName(CallTreeNode node)
     {
         return NameFormatter.FormatMethodDisplayName(node.Name);
     }
 
-    private string GetCallTreeDisplayName(string matchName)
+    private static string GetCallTreeDisplayName(string matchName)
     {
         if (IsUnmanagedFrame(matchName))
         {
@@ -2162,7 +2160,7 @@ public sealed class ProfilerConsoleRenderer
         return matchName;
     }
 
-    private bool ShouldStopAtLeaf(string matchName)
+    private static bool ShouldStopAtLeaf(string matchName)
     {
         return IsUnmanagedFrame(matchName) ||
                matchName.Contains("CastHelpers.", StringComparison.Ordinal) ||
@@ -2179,7 +2177,7 @@ public sealed class ProfilerConsoleRenderer
                 matchName.EndsWith(".ToArray", StringComparison.Ordinal));
     }
 
-    private bool MatchesFunctionFilter(string name, string? filter)
+    private static bool MatchesFunctionFilter(string name, string? filter)
     {
         if (string.IsNullOrWhiteSpace(filter))
         {
@@ -2190,7 +2188,7 @@ public sealed class ProfilerConsoleRenderer
                FormatFunctionDisplayName(name).Contains(filter, StringComparison.OrdinalIgnoreCase);
     }
 
-    private IReadOnlyList<ExceptionTypeSample> FilterExceptionTypes(
+    private static IReadOnlyList<ExceptionTypeSample> FilterExceptionTypes(
         IReadOnlyList<ExceptionTypeSample> types,
         string? filter)
     {
@@ -2206,7 +2204,7 @@ public sealed class ProfilerConsoleRenderer
             .ToList();
     }
 
-    private string? SelectExceptionType(IReadOnlyList<ExceptionTypeSample> types, string? filter)
+    private static string? SelectExceptionType(IReadOnlyList<ExceptionTypeSample> types, string? filter)
     {
         if (string.IsNullOrWhiteSpace(filter))
         {
@@ -2239,7 +2237,7 @@ public sealed class ProfilerConsoleRenderer
                StartsWithDigits(formatted);
     }
 
-    private bool StartsWithDigits(string name)
+    private static bool StartsWithDigits(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -2250,7 +2248,7 @@ public sealed class ProfilerConsoleRenderer
         return trimmed.Length > 0 && char.IsDigit(trimmed[0]);
     }
 
-    private string WrapAnsi(string text, string? color)
+    private static string WrapAnsi(string text, string? color)
     {
         if (string.IsNullOrWhiteSpace(color))
         {
@@ -2264,6 +2262,9 @@ public sealed class ProfilerConsoleRenderer
     {
         return _jitNumberRegex.Replace(text, match => WrapAnsi(match.Value, _theme.AccentColor));
     }
+
+    [GeneratedRegex(@"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])", RegexOptions.Compiled)]
+    private static partial Regex MyRegex();
 }
 
 public sealed record TableColumnSpec(string Header, bool RightAligned = false);
