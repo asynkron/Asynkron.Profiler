@@ -799,6 +799,41 @@ public sealed partial class ProfilerConsoleRenderer
             table);
     }
 
+    private (CallTreeNode RootNode, double RootTotal, string Title, int MaxDepth, int MaxWidth, int SiblingCutoffPercent)
+        PrepareCallTreeDisplay(
+            CallTreeNode callTreeRoot,
+            double totalTime,
+            string title,
+            string? rootFilter,
+            bool includeRuntime,
+            int maxDepth,
+            int maxWidth,
+            string? rootMode,
+            int siblingCutoffPercent)
+    {
+        var normalizedMaxDepth = Math.Max(1, maxDepth);
+        var normalizedMaxWidth = Math.Max(1, maxWidth);
+        var normalizedSiblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
+        var (rootNode, rootTotal, resolvedTitle) = ResolveCallTreeRoot(
+            callTreeRoot,
+            totalTime,
+            title,
+            rootFilter,
+            includeRuntime,
+            rootMode);
+
+        return (rootNode, rootTotal, resolvedTitle, normalizedMaxDepth, normalizedMaxWidth, normalizedSiblingCutoffPercent);
+    }
+
+    private Tree CreateCallTree(string rootLabel)
+    {
+        return new Tree(rootLabel)
+        {
+            Style = _treeGuideStyle,
+            Guide = new CompactTreeGuide()
+        };
+    }
+
     private Rows BuildContentionCallTree(
         ContentionProfileResult results,
         string? rootFilter,
@@ -811,18 +846,19 @@ public sealed partial class ProfilerConsoleRenderer
         var callTreeRoot = results.CallTreeRoot;
         var totalTime = results.TotalWaitMs;
         var totalSamples = callTreeRoot.Calls;
-        var title = "Call Tree (Wait Time)";
-        maxDepth = Math.Max(1, maxDepth);
-        maxWidth = Math.Max(1, maxWidth);
-        siblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
-        var (rootNode, rootTotal, resolvedTitle) = ResolveCallTreeRoot(
+        var (rootNode, rootTotal, title, normalizedMaxDepth, normalizedMaxWidth, normalizedSiblingCutoffPercent) = PrepareCallTreeDisplay(
             callTreeRoot,
             totalTime,
-            title,
+            "Call Tree (Wait Time)",
             rootFilter,
             includeRuntime,
-            rootMode);
-        title = resolvedTitle;
+            maxDepth,
+            maxWidth,
+            rootMode,
+            siblingCutoffPercent);
+        maxDepth = normalizedMaxDepth;
+        maxWidth = normalizedMaxWidth;
+        siblingCutoffPercent = normalizedSiblingCutoffPercent;
 
         var rootLabel = FormatCallTreeLine(
             rootNode,
@@ -832,11 +868,7 @@ public sealed partial class ProfilerConsoleRenderer
             isRoot: true,
             timeUnitLabel: "ms",
             countSuffix: "x");
-        var tree = new Tree(rootLabel)
-        {
-            Style = _treeGuideStyle,
-            Guide = new CompactTreeGuide()
-        };
+        var tree = CreateCallTree(rootLabel);
         var children = CallTreeFilters.GetVisibleChildren(
             rootNode,
             includeRuntime,
@@ -925,11 +957,7 @@ public sealed partial class ProfilerConsoleRenderer
         }
 
         var rootLabel = FormatExceptionCallTreeLine(rootNode, rootTotal, isRoot: true, rootLabelOverride);
-        var tree = new Tree(rootLabel)
-        {
-            Style = _treeGuideStyle,
-            Guide = new CompactTreeGuide()
-        };
+        var tree = CreateCallTree(rootLabel);
         var children = CallTreeFilters.GetVisibleChildren(
             rootNode,
             includeRuntime,
@@ -976,11 +1004,7 @@ public sealed partial class ProfilerConsoleRenderer
         int siblingCutoffPercent)
     {
         var rootLabel = FormatAllocationCallTreeLine(root, root.TotalBytes, isRoot: true, isLeaf: false);
-        var tree = new Tree(rootLabel)
-        {
-            Style = _treeGuideStyle,
-            Guide = new CompactTreeGuide()
-        };
+        var tree = CreateCallTree(rootLabel);
         var children = GetVisibleAllocationChildren(root, includeRuntime, maxWidth, siblingCutoffPercent);
         foreach (var child in children)
         {
@@ -1147,18 +1171,19 @@ public sealed partial class ProfilerConsoleRenderer
         var callTreeRoot = results.CallTreeRoot;
         var totalTime = results.CallTreeTotal;
         var totalSamples = callTreeRoot.Calls;
-        var title = useSelfTime ? "Call Tree (Self Time)" : "Call Tree (Total Time)";
-        maxDepth = Math.Max(1, maxDepth);
-        maxWidth = Math.Max(1, maxWidth);
-        siblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
-        var (rootNode, rootTotal, resolvedTitle) = ResolveCallTreeRoot(
+        var (rootNode, rootTotal, title, normalizedMaxDepth, normalizedMaxWidth, normalizedSiblingCutoffPercent) = PrepareCallTreeDisplay(
             callTreeRoot,
             totalTime,
-            title,
+            useSelfTime ? "Call Tree (Self Time)" : "Call Tree (Total Time)",
             rootFilter,
             includeRuntime,
-            rootMode);
-        title = resolvedTitle;
+            maxDepth,
+            maxWidth,
+            rootMode,
+            siblingCutoffPercent);
+        maxDepth = normalizedMaxDepth;
+        maxWidth = normalizedMaxWidth;
+        siblingCutoffPercent = normalizedSiblingCutoffPercent;
 
         if (showTimeline && rootNode.HasTiming)
         {
@@ -1220,11 +1245,7 @@ public sealed partial class ProfilerConsoleRenderer
             timeline: null,
             depth: 0,
             useHeatColor: true);
-        var tree = new Tree(rootLabel)
-        {
-            Style = _treeGuideStyle,
-            Guide = new CompactTreeGuide()
-        };
+        var tree = CreateCallTree(rootLabel);
         if (allocationTypeLimit > 0)
         {
             AddAllocationTypeNodes(tree, rootNode, allocationTypeLimit);

@@ -90,43 +90,22 @@ public sealed class ProfilerTraceAnalyzer
                 }
 
                 var typeName = GetExceptionTypeName(data);
-                var frames = EnumerateCpuFrames(stack).ToList();
-                if (frames.Count == 0)
-                {
-                    frames.Add("Unknown");
-                }
-
-                frames.Reverse();
-
-                var node = callTreeRoot;
-                node.AddExceptionTotals(1);
-                for (var i = 0; i < frames.Count; i++)
-                {
-                    var frame = frames[i];
-                    if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                callTreeRoot.AddExceptionTotals(1);
+                VisitCallTreeFrames(
+                    EnumerateCpuFrames(stack),
+                    callTreeRoot,
+                    frameIndices,
+                    framesList,
+                    (child, _, isLeaf) =>
                     {
-                        frameIdx = framesList.Count;
-                        framesList.Add(frame);
-                        frameIndices[frame] = frameIdx;
-                    }
+                        if (isLeaf)
+                        {
+                            child.AddException(typeName, 1);
+                            return;
+                        }
 
-                    if (!node.Children.TryGetValue(frameIdx, out var child))
-                    {
-                        child = new CallTreeNode(frameIdx, frame);
-                        node.Children[frameIdx] = child;
-                    }
-
-                    if (i == frames.Count - 1)
-                    {
-                        child.AddException(typeName, 1);
-                    }
-                    else
-                    {
                         child.AddExceptionTotals(1);
-                    }
-
-                    node = child;
-                }
+                    });
             }
 
             source.Clr.GCAllocationTick += data =>
@@ -144,43 +123,22 @@ public sealed class ProfilerTraceAnalyzer
                 }
 
                 var typeName = string.IsNullOrWhiteSpace(data.TypeName) ? "Unknown" : data.TypeName;
-                var frames = EnumerateCpuFrames(stack).ToList();
-                if (frames.Count == 0)
-                {
-                    frames.Add("Unknown");
-                }
-
-                frames.Reverse();
-
-                var node = callTreeRoot;
-                node.AddAllocationTotals(bytes);
-                for (var i = 0; i < frames.Count; i++)
-                {
-                    var frame = frames[i];
-                    if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                callTreeRoot.AddAllocationTotals(bytes);
+                VisitCallTreeFrames(
+                    EnumerateCpuFrames(stack),
+                    callTreeRoot,
+                    frameIndices,
+                    framesList,
+                    (child, _, isLeaf) =>
                     {
-                        frameIdx = framesList.Count;
-                        framesList.Add(frame);
-                        frameIndices[frame] = frameIdx;
-                    }
+                        if (isLeaf)
+                        {
+                            child.AddAllocation(typeName, bytes);
+                            return;
+                        }
 
-                    if (!node.Children.TryGetValue(frameIdx, out var child))
-                    {
-                        child = new CallTreeNode(frameIdx, frame);
-                        node.Children[frameIdx] = child;
-                    }
-
-                    if (i == frames.Count - 1)
-                    {
-                        child.AddAllocation(typeName, bytes);
-                    }
-                    else
-                    {
                         child.AddAllocationTotals(bytes);
-                    }
-
-                    node = child;
-                }
+                    });
             };
 
             source.Clr.ExceptionStart += data =>
@@ -237,52 +195,32 @@ public sealed class ProfilerTraceAnalyzer
 
                 lastSampleTimeMs = timeMs;
 
-                var frames = EnumerateCpuFrames(stack).ToList();
-                if (frames.Count == 0)
-                {
-                    frames.Add("Unknown");
-                }
-
-                frames.Reverse();
-
                 totalSamples++;
                 callTreeTotal += weight;
 
-                var node = callTreeRoot;
-                for (var i = 0; i < frames.Count; i++)
-                {
-                    var frame = frames[i];
-                    if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                var node = VisitCallTreeFrames(
+                    EnumerateCpuFrames(stack),
+                    callTreeRoot,
+                    frameIndices,
+                    framesList,
+                    (child, frame, _) =>
                     {
-                        frameIdx = framesList.Count;
-                        framesList.Add(frame);
-                        frameIndices[frame] = frameIdx;
-                    }
+                        if (weight > 0)
+                        {
+                            child.Total += weight;
+                        }
 
-                    if (!node.Children.TryGetValue(frameIdx, out var child))
-                    {
-                        child = new CallTreeNode(frameIdx, frame);
-                        node.Children[frameIdx] = child;
-                    }
+                        if (child.Calls < int.MaxValue)
+                        {
+                            child.Calls += 1;
+                        }
 
-                    if (weight > 0)
-                    {
-                        child.Total += weight;
-                    }
+                        frameCounts.TryGetValue(frame, out var count);
+                        frameCounts[frame] = count + 1;
 
-                    if (child.Calls < int.MaxValue)
-                    {
-                        child.Calls += 1;
-                    }
-
-                    frameCounts.TryGetValue(frame, out var count);
-                    frameCounts[frame] = count + 1;
-
-                    frameTotals.TryGetValue(frame, out var total);
-                    frameTotals[frame] = total + weight;
-
-                    node = child;
-                }
+                        frameTotals.TryGetValue(frame, out var total);
+                        frameTotals[frame] = total + weight;
+                    });
 
                 if (weight > 0)
                 {
@@ -721,45 +659,26 @@ public sealed class ProfilerTraceAnalyzer
                     return;
                 }
 
-                var frames = EnumerateContentionFrames(stack).ToList();
-                if (frames.Count == 0)
-                {
-                    frames.Add("Unknown");
-                }
-
-                frames.Reverse();
-
-                var node = callTreeRoot;
-                foreach (var frame in frames)
-                {
-                    if (!frameIndices.TryGetValue(frame, out var frameIdx))
+                VisitCallTreeFrames(
+                    EnumerateContentionFrames(stack),
+                    callTreeRoot,
+                    frameIndices,
+                    framesList,
+                    (child, frame, _) =>
                     {
-                        frameIdx = framesList.Count;
-                        framesList.Add(frame);
-                        frameIndices[frame] = frameIdx;
-                    }
+                        child.Total += durationMs;
+                        if (child.Calls < int.MaxValue)
+                        {
+                            child.Calls += 1;
+                        }
 
-                    if (!node.Children.TryGetValue(frameIdx, out var child))
-                    {
-                        child = new CallTreeNode(frameIdx, frame);
-                        node.Children[frameIdx] = child;
-                    }
-
-                    child.Total += durationMs;
-                    if (child.Calls < int.MaxValue)
-                    {
-                        child.Calls += 1;
-                    }
-
-                    frameTotals[frame] = frameTotals.TryGetValue(frame, out var total)
-                        ? total + durationMs
-                        : durationMs;
-                    frameCounts[frame] = frameCounts.TryGetValue(frame, out var count)
-                        ? count + 1
-                        : 1;
-
-                    node = child;
-                }
+                        frameTotals[frame] = frameTotals.TryGetValue(frame, out var total)
+                            ? total + durationMs
+                            : durationMs;
+                        frameCounts[frame] = frameCounts.TryGetValue(frame, out var count)
+                            ? count + 1
+                            : 1;
+                    });
 
                 totalWaitMs += durationMs;
                 totalCount += 1;
@@ -866,37 +785,73 @@ public sealed class ProfilerTraceAnalyzer
         Dictionary<string, int> frameIndices,
         List<string> framesList)
     {
-        var frames = EnumerateExceptionFrames(stack).ToList();
-        if (frames.Count == 0)
-        {
-            frames.Add("Unknown");
-        }
+        VisitCallTreeFrames(
+            EnumerateExceptionFrames(stack),
+            root,
+            frameIndices,
+            framesList,
+            static (child, _, _) =>
+            {
+                child.Total += 1;
+                if (child.Calls < int.MaxValue)
+                {
+                    child.Calls += 1;
+                }
+            });
+    }
 
-        frames.Reverse();
+    private static CallTreeNode VisitCallTreeFrames(
+        IEnumerable<string> frames,
+        CallTreeNode root,
+        Dictionary<string, int> frameIndices,
+        List<string> framesList,
+        Action<CallTreeNode, string, bool> visitNode)
+    {
+        var orderedFrames = PrepareCallTreeFrames(frames);
         var node = root;
-        foreach (var frame in frames)
+        for (var i = 0; i < orderedFrames.Count; i++)
         {
-            if (!frameIndices.TryGetValue(frame, out var frameIdx))
-            {
-                frameIdx = framesList.Count;
-                framesList.Add(frame);
-                frameIndices[frame] = frameIdx;
-            }
-
-            if (!node.Children.TryGetValue(frameIdx, out var child))
-            {
-                child = new CallTreeNode(frameIdx, frame);
-                node.Children[frameIdx] = child;
-            }
-
-            child.Total += 1;
-            if (child.Calls < int.MaxValue)
-            {
-                child.Calls += 1;
-            }
-
+            var frame = orderedFrames[i];
+            var child = GetOrCreateChildNode(node, frame, frameIndices, framesList);
+            visitNode(child, frame, i == orderedFrames.Count - 1);
             node = child;
         }
+
+        return node;
+    }
+
+    private static List<string> PrepareCallTreeFrames(IEnumerable<string> frames)
+    {
+        var orderedFrames = frames.ToList();
+        if (orderedFrames.Count == 0)
+        {
+            orderedFrames.Add("Unknown");
+        }
+
+        orderedFrames.Reverse();
+        return orderedFrames;
+    }
+
+    private static CallTreeNode GetOrCreateChildNode(
+        CallTreeNode parent,
+        string frame,
+        Dictionary<string, int> frameIndices,
+        List<string> framesList)
+    {
+        if (!frameIndices.TryGetValue(frame, out var frameIdx))
+        {
+            frameIdx = framesList.Count;
+            framesList.Add(frame);
+            frameIndices[frame] = frameIdx;
+        }
+
+        if (!parent.Children.TryGetValue(frameIdx, out var child))
+        {
+            child = new CallTreeNode(frameIdx, frame);
+            parent.Children[frameIdx] = child;
+        }
+
+        return child;
     }
 
     private static IEnumerable<string> EnumerateExceptionFrames(TraceCallStack? stack)

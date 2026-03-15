@@ -252,6 +252,48 @@ string BuildExceptionProvider()
     return $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
 }
 
+TResult? CollectTraceAndAnalyze<TResult>(
+    string[] command,
+    string label,
+    string traceSuffix,
+    string startMessage,
+    string failureLabel,
+    string analysisStatus,
+    Action<List<string>> configureCollectArgs,
+    Func<string, TResult?> analyzeTrace)
+{
+    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    {
+        return default;
+    }
+
+    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
+    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.{traceSuffix}");
+
+    return AnsiConsole.Status()
+        .Spinner(Spinner.Known.Dots)
+        .Start(startMessage, ctx =>
+        {
+            ctx.Status("Collecting trace data...");
+            var collectArgs = new List<string> { "collect" };
+            configureCollectArgs(collectArgs);
+            collectArgs.Add("--output");
+            collectArgs.Add(traceFile);
+            collectArgs.Add("--");
+            collectArgs.AddRange(command);
+
+            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+            if (!success || !File.Exists(traceFile))
+            {
+                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{failureLabel}:[/] {Markup.Escape(stderr)}");
+                return default;
+            }
+
+            ctx.Status(analysisStatus);
+            return analyzeTrace(traceFile);
+        });
+}
+
 string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool includeException)
 {
     if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
@@ -487,40 +529,19 @@ CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
 
 MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
-    {
-        return null;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.alloc.nettrace");
-
-    var callTree = AnsiConsole.Status()
-        .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting allocation trace for [{theme.AccentColor}]{label}[/]...", ctx =>
+    var callTree = CollectTraceAndAnalyze(
+        command,
+        label,
+        "alloc.nettrace",
+        $"Collecting allocation trace for [{theme.AccentColor}]{label}[/]...",
+        "Allocation trace failed",
+        "Analyzing allocation trace...",
+        collectArgs =>
         {
-            ctx.Status("Collecting trace data...");
-            var collectArgs = new List<string>
-            {
-                "collect",
-                "--profile",
-                "gc-verbose",
-                "--output",
-                traceFile,
-                "--"
-            };
-            collectArgs.AddRange(command);
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
-
-            if (!success || !File.Exists(traceFile))
-            {
-                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Allocation trace failed:[/] {Markup.Escape(stderr)}");
-                return null;
-            }
-
-            ctx.Status("Analyzing allocation trace...");
-            return AnalyzeAllocationTrace(traceFile);
-        });
+            collectArgs.Add("--profile");
+            collectArgs.Add("gc-verbose");
+        },
+        AnalyzeAllocationTrace);
 
     if (callTree == null)
     {
@@ -556,41 +577,20 @@ MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
 
 ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
-    {
-        return null;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.exc.nettrace");
     var provider = BuildExceptionProvider();
-
-    return AnsiConsole.Status()
-        .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting exception trace for [{theme.AccentColor}]{label}[/]...", ctx =>
+    return CollectTraceAndAnalyze(
+        command,
+        label,
+        "exc.nettrace",
+        $"Collecting exception trace for [{theme.AccentColor}]{label}[/]...",
+        "Exception trace failed",
+        "Analyzing exception trace...",
+        collectArgs =>
         {
-            ctx.Status("Collecting trace data...");
-            var collectArgs = new List<string>
-            {
-                "collect",
-                "--providers",
-                provider,
-                "--output",
-                traceFile,
-                "--"
-            };
-            collectArgs.AddRange(command);
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
-
-            if (!success || !File.Exists(traceFile))
-            {
-                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Exception trace failed:[/] {Markup.Escape(stderr)}");
-                return null;
-            }
-
-            ctx.Status("Analyzing exception trace...");
-            return AnalyzeExceptionTrace(traceFile);
-        });
+            collectArgs.Add("--providers");
+            collectArgs.Add(provider);
+        },
+        AnalyzeExceptionTrace);
 }
 
 ExceptionProfileResult? ExceptionProfileFromInput(string inputPath, string label)
@@ -626,43 +626,22 @@ ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
 
 ContentionProfileResult? ContentionProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
-    {
-        return null;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.cont.nettrace");
     var keywordsValue = ClrTraceEventParser.Keywords.Contention | ClrTraceEventParser.Keywords.Threading;
     var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
     var provider = $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
-
-    return AnsiConsole.Status()
-        .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting lock contention trace for [{theme.AccentColor}]{label}[/]...", ctx =>
+    return CollectTraceAndAnalyze(
+        command,
+        label,
+        "cont.nettrace",
+        $"Collecting lock contention trace for [{theme.AccentColor}]{label}[/]...",
+        "Contention trace failed",
+        "Analyzing contention trace...",
+        collectArgs =>
         {
-            ctx.Status("Collecting trace data...");
-            var collectArgs = new List<string>
-            {
-                "collect",
-                "--providers",
-                provider,
-                "--output",
-                traceFile,
-                "--"
-            };
-            collectArgs.AddRange(command);
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
-
-            if (!success || !File.Exists(traceFile))
-            {
-                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Contention trace failed:[/] {Markup.Escape(stderr)}");
-                return null;
-            }
-
-            ctx.Status("Analyzing contention trace...");
-            return AnalyzeContentionTrace(traceFile);
-        });
+            collectArgs.Add("--providers");
+            collectArgs.Add(provider);
+        },
+        AnalyzeContentionTrace);
 }
 
 ContentionProfileResult? ContentionProfileFromInput(string inputPath, string label)
