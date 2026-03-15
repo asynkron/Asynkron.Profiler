@@ -461,38 +461,23 @@ public sealed class ProfilerTraceAnalyzer
                 RecordCatch(data);
             };
 
-            source.Dynamic.AddCallbackForProviderEvent(
-                "Microsoft-Windows-DotNETRuntime",
-                "ExceptionStart",
-                data =>
-                {
-                    if (!sawTypedThrow)
+            void RegisterDynamicExceptionEvent(string eventName, Func<bool> hasTypedHandler, Action<TraceEvent> recorder)
+            {
+                source.Dynamic.AddCallbackForProviderEvent(
+                    "Microsoft-Windows-DotNETRuntime",
+                    eventName,
+                    data =>
                     {
-                        RecordThrow(data);
-                    }
-                });
+                        if (!hasTypedHandler())
+                        {
+                            recorder(data);
+                        }
+                    });
+            }
 
-            source.Dynamic.AddCallbackForProviderEvent(
-                "Microsoft-Windows-DotNETRuntime",
-                "ExceptionThrown",
-                data =>
-                {
-                    if (!sawTypedThrow)
-                    {
-                        RecordThrow(data);
-                    }
-                });
-
-            source.Dynamic.AddCallbackForProviderEvent(
-                "Microsoft-Windows-DotNETRuntime",
-                "ExceptionCatchStart",
-                data =>
-                {
-                    if (!sawTypedCatch)
-                    {
-                        RecordCatch(data);
-                    }
-                });
+            RegisterDynamicExceptionEvent("ExceptionStart", () => sawTypedThrow, RecordThrow);
+            RegisterDynamicExceptionEvent("ExceptionThrown", () => sawTypedThrow, RecordThrow);
+            RegisterDynamicExceptionEvent("ExceptionCatchStart", () => sawTypedCatch, RecordCatch);
 
             source.Process();
 
@@ -854,45 +839,41 @@ public sealed class ProfilerTraceAnalyzer
         return child;
     }
 
-    private static IEnumerable<string> EnumerateExceptionFrames(TraceCallStack? stack)
+    private static string? GetFrameMethodName(TraceCallStack? stack)
     {
-        if (stack == null)
+        var methodName = stack?.CodeAddress?.FullMethodName;
+        if (string.IsNullOrWhiteSpace(methodName))
         {
-            yield break;
+            methodName = stack?.CodeAddress?.Method?.FullMethodName;
         }
 
+        return string.IsNullOrWhiteSpace(methodName) ? null : methodName;
+    }
+
+    private static IEnumerable<string> EnumerateResolvedFrameNames(TraceCallStack? stack)
+    {
         for (var current = stack; current != null; current = current.Caller)
         {
-            var methodName = current.CodeAddress?.FullMethodName;
-            if (string.IsNullOrWhiteSpace(methodName))
-            {
-                methodName = current.CodeAddress?.Method?.FullMethodName;
-            }
-
-            if (!string.IsNullOrWhiteSpace(methodName))
+            var methodName = GetFrameMethodName(current);
+            if (methodName != null)
             {
                 yield return methodName;
             }
         }
     }
 
+    private static IEnumerable<string> EnumerateExceptionFrames(TraceCallStack? stack)
+    {
+        return EnumerateResolvedFrameNames(stack);
+    }
+
     private static IEnumerable<string> EnumerateCpuFrames(TraceCallStack? stack)
     {
-        if (stack == null)
-        {
-            yield break;
-        }
-
         var lastWasUnknown = false;
         for (var current = stack; current != null; current = current.Caller)
         {
-            var methodName = current.CodeAddress?.FullMethodName;
-            if (string.IsNullOrWhiteSpace(methodName))
-            {
-                methodName = current.CodeAddress?.Method?.FullMethodName;
-            }
-
-            if (string.IsNullOrWhiteSpace(methodName))
+            var methodName = GetFrameMethodName(current);
+            if (methodName == null)
             {
                 if (!lastWasUnknown)
                 {
@@ -912,52 +893,18 @@ public sealed class ProfilerTraceAnalyzer
     {
         for (var current = stack; current != null; current = current.Caller)
         {
-            var methodName = current.CodeAddress?.FullMethodName;
-            if (string.IsNullOrWhiteSpace(methodName))
-            {
-                methodName = current.CodeAddress?.Method?.FullMethodName;
-            }
-
-            yield return methodName ?? "Unknown";
+            yield return GetFrameMethodName(current) ?? "Unknown";
         }
     }
 
     private static IEnumerable<string> EnumerateContentionFrames(TraceCallStack? stack)
     {
-        if (stack == null)
-        {
-            yield break;
-        }
-
-        for (var current = stack; current != null; current = current.Caller)
-        {
-            var methodName = current.CodeAddress?.FullMethodName;
-            if (string.IsNullOrWhiteSpace(methodName))
-            {
-                methodName = current.CodeAddress?.Method?.FullMethodName;
-            }
-
-            if (!string.IsNullOrWhiteSpace(methodName))
-            {
-                yield return methodName;
-            }
-        }
+        return EnumerateResolvedFrameNames(stack);
     }
 
     private static string? GetTopFrameName(TraceCallStack? stack)
     {
-        if (stack == null)
-        {
-            return null;
-        }
-
-        var methodName = stack.CodeAddress?.FullMethodName;
-        if (string.IsNullOrWhiteSpace(methodName))
-        {
-            methodName = stack.CodeAddress?.Method?.FullMethodName;
-        }
-
-        return string.IsNullOrWhiteSpace(methodName) ? null : methodName;
+        return GetFrameMethodName(stack);
     }
 
     private static string GetExceptionTypeName(TraceEvent data)
