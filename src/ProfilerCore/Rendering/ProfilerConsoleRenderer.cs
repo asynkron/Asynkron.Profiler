@@ -1467,7 +1467,7 @@ public sealed partial class ProfilerConsoleRenderer
                 totalSamples,
                 useSelfTime,
                 includeRuntime,
-                depth: depth,
+                depth,
                 maxDepth,
                 maxWidth,
                 siblingCutoffPercent,
