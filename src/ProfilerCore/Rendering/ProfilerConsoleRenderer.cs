@@ -196,7 +196,7 @@ public sealed partial class ProfilerConsoleRenderer
                 exceptionTypeLimit,
                 hotThreshold,
                 showTimeline: allowTimeline && showTimeline,
-                timelineWidth));
+                timelineWidth: timelineWidth));
         }
 
         RenderCpuCallTree(useSelfTime: false, allowTimeline: true);
