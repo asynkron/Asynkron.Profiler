@@ -8,7 +8,7 @@ using Spectre.Console;
 
 namespace Asynkron.Profiler;
 
-internal sealed class ProjectResolver
+internal sealed partial class ProjectResolver
 {
     private readonly Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> _runProcess;
 
@@ -205,7 +205,7 @@ internal sealed class ProjectResolver
 
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var trimmed = stdout.TrimStart();
-        if (trimmed.StartsWith("{", StringComparison.Ordinal))
+        if (trimmed.StartsWith('{'))
         {
             try
             {
@@ -251,7 +251,7 @@ internal sealed class ProjectResolver
         return result;
     }
 
-    private string? ResolveTargetFramework(
+    private static string? ResolveTargetFramework(
         Dictionary<string, string> props,
         string? targetFramework,
         string projectPath)
@@ -283,7 +283,7 @@ internal sealed class ProjectResolver
             : null;
     }
 
-    private string[] ResolveTargetCommand(string targetPath)
+    private static string[] ResolveTargetCommand(string targetPath)
     {
         if (targetPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
         {
@@ -293,9 +293,9 @@ internal sealed class ProjectResolver
         return new[] { targetPath };
     }
 
-    private IEnumerable<string> GetSolutionProjects(string solutionPath)
+    private static IEnumerable<string> GetSolutionProjects(string solutionPath)
     {
-        var projectPattern = new Regex("Project\\([^)]*\\)\\s*=\\s*\"[^\"]+\",\\s*\"([^\"]+\\.csproj)\"", RegexOptions.IgnoreCase);
+        var projectPattern = MyRegex();
         foreach (var line in File.ReadLines(solutionPath))
         {
             var match = projectPattern.Match(line);
@@ -343,6 +343,9 @@ internal sealed class ProjectResolver
     {
         return command.Length == 0 ? string.Empty : string.Join(' ', command);
     }
+
+    [GeneratedRegex("Project\\([^)]*\\)\\s*=\\s*\"[^\"]+\",\\s*\"([^\"]+\\.csproj)\"", RegexOptions.IgnoreCase, "sv-SE")]
+    private static partial Regex MyRegex();
 }
 
 internal sealed record ResolvedCommand(string[] Command, string Label, string Description);
