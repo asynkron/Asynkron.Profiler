@@ -19,48 +19,6 @@ var versionProbeArgs = new[] { "--version" };
 var theme = Theme.Current;
 var renderer = new ProfilerConsoleRenderer(theme);
 
-void PrintSection(string text, string? color = null)
-{
-    Console.WriteLine();
-    if (string.IsNullOrWhiteSpace(color))
-    {
-        Console.WriteLine(text);
-        return;
-    }
-
-    AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(text)}[/]");
-}
-
-bool TryParseHexColor(string value, out (byte R, byte G, byte B) rgb)
-{
-    rgb = default;
-    if (string.IsNullOrWhiteSpace(value))
-    {
-        return false;
-    }
-
-    var trimmed = value.Trim();
-    if (trimmed.StartsWith('#'))
-    {
-        trimmed = trimmed[1..];
-    }
-
-    if (trimmed.Length != 6)
-    {
-        return false;
-    }
-
-    if (!byte.TryParse(trimmed.AsSpan(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var r) ||
-        !byte.TryParse(trimmed.AsSpan(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var g) ||
-        !byte.TryParse(trimmed.AsSpan(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var b))
-    {
-        return false;
-    }
-
-    rgb = (r, g, b);
-    return true;
-}
-
 bool TryApplyTheme(string? themeName)
 {
     if (!Theme.TryResolve(themeName, out var selectedTheme))
@@ -453,7 +411,7 @@ void RunHotJitDisasm(
     }
 
     var hotMethods = CollectHotMethods(rootNode, totalTime, totalSamples, includeRuntime, hotThreshold);
-    PrintSection(title, theme.AccentColor);
+    ConsoleThemeHelpers.PrintSection(title, theme.AccentColor);
     if (hotMethods.Count == 0)
     {
         AnsiConsole.MarkupLine($"[{theme.AccentColor}]No hot methods found.[/]");
@@ -1259,7 +1217,7 @@ string AnsiColor(string hex, bool dim = false)
 
 bool TryResolveRgb(string value, out (byte R, byte G, byte B) rgb)
 {
-    if (TryParseHexColor(value, out rgb))
+    if (ConsoleThemeHelpers.TryParseHexColor(value, out rgb))
     {
         return true;
     }
@@ -1420,7 +1378,7 @@ void PrintJitDisasmSummary(string logPath)
         instructionCount = instructions;
     }
 
-    PrintSection("JIT DISASM SUMMARY", theme.AccentColor);
+    ConsoleThemeHelpers.PrintSection("JIT DISASM SUMMARY", theme.AccentColor);
     if (string.IsNullOrWhiteSpace(methodName))
     {
         AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No disassembly markers found.[/]");
@@ -1515,7 +1473,7 @@ void PrintJitInlineSummary(string logPath)
         }
     }
 
-    PrintSection("JIT INLINE SUMMARY", theme.AccentColor);
+    ConsoleThemeHelpers.PrintSection("JIT INLINE SUMMARY", theme.AccentColor);
     if (methodCount == 0)
     {
         AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No JIT dump markers found.[/]");
@@ -1834,6 +1792,31 @@ rootCommand.SetHandler(context =>
         description = resolved.Description;
     }
 
+    void RenderCpuResults(CpuProfileResult? results, MemoryProfileResult? memoryResults = null)
+    {
+        renderer.PrintCpuResults(
+            results,
+            label,
+            description,
+            callTreeRoot,
+            functionFilter,
+            includeRuntime,
+            callTreeDepth,
+            callTreeWidth,
+            callTreeRootMode,
+            callTreeSelf,
+            callTreeSiblingCutoff,
+            hotThreshold,
+            timeline,
+            timelineWidth,
+            memoryResults: memoryResults);
+
+        if ((jitDisasmHot || hotThresholdSpecified) && jit && results != null)
+        {
+            RunHotJitDisasm(results, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
+        }
+    }
+
     if (jitInline || jitDisasm)
     {
         if (hasInput)
@@ -1933,26 +1916,7 @@ rootCommand.SetHandler(context =>
 
         if (cpuResults != null)
         {
-            renderer.PrintCpuResults(
-                cpuResults,
-                label,
-                description,
-                callTreeRoot,
-                functionFilter,
-                includeRuntime,
-                callTreeDepth,
-                callTreeWidth,
-                callTreeRootMode,
-                callTreeSelf,
-                callTreeSiblingCutoff,
-                hotThreshold,
-                timeline,
-                timelineWidth,
-                memoryResults: memoryResults);
-            if ((jitDisasmHot || hotThresholdSpecified) && jit)
-            {
-                RunHotJitDisasm(cpuResults, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
-            }
+            RenderCpuResults(cpuResults, memoryResults);
         }
         else if (memoryResults != null)
         {
@@ -1977,25 +1941,7 @@ rootCommand.SetHandler(context =>
                 : sharedTraceFile != null
                     ? AnalyzeCpuTrace(sharedTraceFile)
                     : CpuProfileCommand(command, label);
-            renderer.PrintCpuResults(
-                results,
-                label,
-                description,
-                callTreeRoot,
-                functionFilter,
-                includeRuntime,
-                callTreeDepth,
-                callTreeWidth,
-                callTreeRootMode,
-                callTreeSelf,
-                callTreeSiblingCutoff,
-                hotThreshold,
-                timeline,
-                timelineWidth);
-            if ((jitDisasmHot || hotThresholdSpecified) && jit && results != null)
-            {
-                RunHotJitDisasm(results, command, callTreeRoot, callTreeRootMode, includeRuntime, hotThreshold);
-            }
+            RenderCpuResults(results);
         }
 
         if (runMemory)

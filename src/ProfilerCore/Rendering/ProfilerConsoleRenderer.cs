@@ -26,7 +26,7 @@ public sealed partial class ProfilerConsoleRenderer
     public ProfilerConsoleRenderer(Theme? theme = null)
     {
         _theme = theme ?? Theme.Current;
-        _treeGuideStyle = new Style(ParseColor(_theme.TreeGuideColor));
+        _treeGuideStyle = new Style(ConsoleThemeHelpers.ParseHexColor(_theme.TreeGuideColor));
     }
 
     public Theme Theme => _theme;
@@ -54,7 +54,7 @@ public sealed partial class ProfilerConsoleRenderer
             return;
         }
 
-        PrintSection($"CPU PROFILE: {profileName}");
+        ConsoleThemeHelpers.PrintSection($"CPU PROFILE: {profileName}");
         if (!string.IsNullOrWhiteSpace(description))
         {
             AnsiConsole.MarkupLine($"[dim]{description}[/]");
@@ -132,7 +132,7 @@ public sealed partial class ProfilerConsoleRenderer
         }
         else
         {
-            PrintSection(topTitle, _theme.CpuCountColor);
+            ConsoleThemeHelpers.PrintSection(topTitle, _theme.CpuCountColor);
             AnsiConsole.Write(topTable);
         }
         var filteredOut = allFunctions.Count - filteredList.Count;
@@ -172,7 +172,7 @@ public sealed partial class ProfilerConsoleRenderer
             }
         };
 
-        PrintSection("Summary");
+        ConsoleThemeHelpers.PrintSection("Summary");
         WriteTable(
             new[]
             {
@@ -234,7 +234,7 @@ public sealed partial class ProfilerConsoleRenderer
             return;
         }
 
-        PrintSection($"MEMORY PROFILE: {profileName}");
+        ConsoleThemeHelpers.PrintSection($"MEMORY PROFILE: {profileName}");
         if (!string.IsNullOrWhiteSpace(description))
         {
             AnsiConsole.MarkupLine($"[dim]{description}[/]");
@@ -277,12 +277,12 @@ public sealed partial class ProfilerConsoleRenderer
 
         if (!string.IsNullOrWhiteSpace(results.AllocationByTypeRaw))
         {
-            PrintSection("Allocation By Type (Sampled)", _theme.MemoryCountColor);
+            ConsoleThemeHelpers.PrintSection("Allocation By Type (Sampled)", _theme.MemoryCountColor);
             AnsiConsole.WriteLine(results.AllocationByTypeRaw);
         }
         else if (results.AllocationEntries.Count > 0)
         {
-            PrintSection("Allocation By Type (Sampled)", _theme.MemoryCountColor);
+            ConsoleThemeHelpers.PrintSection("Allocation By Type (Sampled)", _theme.MemoryCountColor);
             PrintAllocationTable(results.AllocationEntries, results.AllocationTotal);
         }
         else if (!hasRows && !string.IsNullOrWhiteSpace(results.RawOutput))
@@ -292,7 +292,7 @@ public sealed partial class ProfilerConsoleRenderer
 
         if (results.AllocationCallTree != null)
         {
-            PrintSection("Allocation Call Tree (Sampled)");
+            ConsoleThemeHelpers.PrintSection("Allocation Call Tree (Sampled)");
             PrintAllocationCallTree(
                 results.AllocationCallTree,
                 callTreeRoot,
@@ -322,7 +322,7 @@ public sealed partial class ProfilerConsoleRenderer
             return;
         }
 
-        PrintSection($"EXCEPTION PROFILE: {profileName}");
+        ConsoleThemeHelpers.PrintSection($"EXCEPTION PROFILE: {profileName}");
         if (!string.IsNullOrWhiteSpace(description))
         {
             AnsiConsole.MarkupLine($"[dim]{description}[/]");
@@ -357,7 +357,7 @@ public sealed partial class ProfilerConsoleRenderer
         }
         else
         {
-            PrintSection("Top Exceptions (Thrown)");
+            ConsoleThemeHelpers.PrintSection("Top Exceptions (Thrown)");
             var rows = new List<IReadOnlyList<string>>();
 
             foreach (var entry in filteredExceptionTypes.Take(15))
@@ -406,7 +406,7 @@ public sealed partial class ProfilerConsoleRenderer
             });
         }
 
-        PrintSection("Summary");
+        ConsoleThemeHelpers.PrintSection("Summary");
         WriteTable(
             new[]
             {
@@ -444,7 +444,7 @@ public sealed partial class ProfilerConsoleRenderer
             var catchList = filteredCatchSites.ToList();
             if (catchList.Count > 0)
             {
-                PrintSection("Top Catch Sites");
+                ConsoleThemeHelpers.PrintSection("Top Catch Sites");
                 var catchRows = new List<IReadOnlyList<string>>();
 
                 foreach (var entry in catchList.Take(15))
@@ -511,7 +511,7 @@ public sealed partial class ProfilerConsoleRenderer
             return;
         }
 
-        PrintSection($"LOCK CONTENTION PROFILE: {profileName}");
+        ConsoleThemeHelpers.PrintSection($"LOCK CONTENTION PROFILE: {profileName}");
         if (!string.IsNullOrWhiteSpace(description))
         {
             AnsiConsole.MarkupLine($"[dim]{description}[/]");
@@ -528,7 +528,7 @@ public sealed partial class ProfilerConsoleRenderer
             ? "Top Contended Functions (All)"
             : "Top Contended Functions (Filtered)";
         var rows = new List<IReadOnlyList<string>>();
-        PrintSection(topTitle);
+        ConsoleThemeHelpers.PrintSection(topTitle);
 
         foreach (var entry in filteredList.Take(15))
         {
@@ -590,7 +590,7 @@ public sealed partial class ProfilerConsoleRenderer
             }
         };
 
-        PrintSection("Summary");
+        ConsoleThemeHelpers.PrintSection("Summary");
         WriteTable(
             new[]
             {
@@ -619,7 +619,7 @@ public sealed partial class ProfilerConsoleRenderer
             return;
         }
 
-        PrintSection($"HEAP SNAPSHOT: {profileName}");
+        ConsoleThemeHelpers.PrintSection($"HEAP SNAPSHOT: {profileName}");
         if (!string.IsNullOrWhiteSpace(description))
         {
             AnsiConsole.MarkupLine($"[dim]{description}[/]");
@@ -686,62 +686,6 @@ public sealed partial class ProfilerConsoleRenderer
         AnsiConsole.Write(tree);
     }
 
-    private static void PrintSection(string text, string? color = null)
-    {
-        Console.WriteLine();
-        if (string.IsNullOrWhiteSpace(color))
-        {
-            Console.WriteLine(text);
-            return;
-        }
-
-        AnsiConsole.MarkupLine($"[{color}]{Markup.Escape(text)}[/]");
-    }
-
-    private static Color ParseColor(string hex)
-    {
-        if (string.IsNullOrWhiteSpace(hex))
-        {
-            return Color.Default;
-        }
-
-        var value = Convert.ToInt32(hex.TrimStart('#'), 16);
-        return new Color(
-            (byte)((value >> 16) & 0xFF),
-            (byte)((value >> 8) & 0xFF),
-            (byte)(value & 0xFF));
-    }
-
-    private static bool TryParseHexColor(string value, out (byte R, byte G, byte B) rgb)
-    {
-        rgb = default;
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var trimmed = value.Trim();
-        if (trimmed.StartsWith('#'))
-        {
-            trimmed = trimmed[1..];
-        }
-
-        if (trimmed.Length != 6)
-        {
-            return false;
-        }
-
-        if (!byte.TryParse(trimmed.AsSpan(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var r) ||
-            !byte.TryParse(trimmed.AsSpan(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var g) ||
-            !byte.TryParse(trimmed.AsSpan(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var b))
-        {
-            return false;
-        }
-
-        rgb = (r, g, b);
-        return true;
-    }
-
     private static string InterpolateColor((byte R, byte G, byte B) start, (byte R, byte G, byte B) end, double t)
     {
         t = Math.Clamp(t, 0d, 1d);
@@ -753,8 +697,8 @@ public sealed partial class ProfilerConsoleRenderer
 
     private string? GetHotnessColor(double hotness)
     {
-        if (!TryParseHexColor(_theme.TextColor, out var cool) ||
-            !TryParseHexColor(_theme.HotColor, out var hot))
+        if (!ConsoleThemeHelpers.TryParseHexColor(_theme.TextColor, out var cool) ||
+            !ConsoleThemeHelpers.TryParseHexColor(_theme.HotColor, out var hot))
         {
             return null;
         }
@@ -871,23 +815,14 @@ public sealed partial class ProfilerConsoleRenderer
         maxDepth = Math.Max(1, maxDepth);
         maxWidth = Math.Max(1, maxWidth);
         siblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
-
-        var rootNode = callTreeRoot;
-        var rootTotal = totalTime;
-        if (!string.IsNullOrWhiteSpace(rootFilter))
-        {
-            var matches = FindCallTreeMatches(callTreeRoot, rootFilter);
-            if (matches.Count > 0)
-            {
-                rootNode = SelectRootMatch(matches, includeRuntime, rootMode);
-                rootTotal = GetCallTreeTime(rootNode, useSelfTime: false);
-                title = $"{title} - root: {Markup.Escape(rootFilter)}";
-            }
-            else
-            {
-                AnsiConsole.MarkupLine($"[{_theme.AccentColor}]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
-            }
-        }
+        var (rootNode, rootTotal, resolvedTitle) = ResolveCallTreeRoot(
+            callTreeRoot,
+            totalTime,
+            title,
+            rootFilter,
+            includeRuntime,
+            rootMode);
+        title = resolvedTitle;
 
         var rootLabel = FormatCallTreeLine(
             rootNode,
@@ -1216,23 +1151,14 @@ public sealed partial class ProfilerConsoleRenderer
         maxDepth = Math.Max(1, maxDepth);
         maxWidth = Math.Max(1, maxWidth);
         siblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
-
-        var rootNode = callTreeRoot;
-        var rootTotal = totalTime;
-        if (!string.IsNullOrWhiteSpace(rootFilter))
-        {
-            var matches = FindCallTreeMatches(callTreeRoot, rootFilter);
-            if (matches.Count > 0)
-            {
-                rootNode = SelectRootMatch(matches, includeRuntime, rootMode);
-                rootTotal = GetCallTreeTime(rootNode, useSelfTime: false);
-                title = $"{title} - root: {Markup.Escape(rootFilter)}";
-            }
-            else
-            {
-                AnsiConsole.MarkupLine($"[{_theme.AccentColor}]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
-            }
-        }
+        var (rootNode, rootTotal, resolvedTitle) = ResolveCallTreeRoot(
+            callTreeRoot,
+            totalTime,
+            title,
+            rootFilter,
+            includeRuntime,
+            rootMode);
+        title = resolvedTitle;
 
         if (showTimeline && rootNode.HasTiming)
         {
@@ -1340,17 +1266,13 @@ public sealed partial class ProfilerConsoleRenderer
                 depth: 1,
                 isHotspot: isHotspot,
                 useHeatColor: true));
-            if (allocationTypeLimit > 0)
-            {
-                AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
-            }
-            if (exceptionTypeLimit > 0)
-            {
-                AddExceptionTypeNodes(childNode, child, exceptionTypeLimit);
-            }
-            if (!isSpecialLeaf)
-            {
-                AddCallTreeChildren(
+            AddCallTreeDecorationsAndChildren(
+                childNode,
+                child,
+                allocationTypeLimit,
+                exceptionTypeLimit,
+                isSpecialLeaf,
+                () => AddCallTreeChildren(
                     childNode,
                     child,
                     rootTotal,
@@ -1367,8 +1289,7 @@ public sealed partial class ProfilerConsoleRenderer
                     exceptionTypeLimit,
                     hotThreshold,
                     highlightHotspots: true,
-                    timeline: null);
-            }
+                    timeline: null));
         }
 
         return new Rows(
@@ -1578,17 +1499,13 @@ public sealed partial class ProfilerConsoleRenderer
                 depth: depth,
                 isHotspot: isHotspot,
                 useHeatColor: highlightHotspots));
-            if (allocationTypeLimit > 0)
-            {
-                AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
-            }
-            if (exceptionTypeLimit > 0)
-            {
-                AddExceptionTypeNodes(childNode, child, exceptionTypeLimit);
-            }
-            if (!isSpecialLeaf)
-            {
-                AddCallTreeChildren(
+            AddCallTreeDecorationsAndChildren(
+                childNode,
+                child,
+                allocationTypeLimit,
+                exceptionTypeLimit,
+                isSpecialLeaf,
+                () => AddCallTreeChildren(
                     childNode,
                     child,
                     totalTime,
@@ -1605,9 +1522,59 @@ public sealed partial class ProfilerConsoleRenderer
                     exceptionTypeLimit,
                     hotThreshold,
                     highlightHotspots,
-                    timeline);
-            }
+                    timeline));
         }
+    }
+
+    private void AddCallTreeDecorationsAndChildren(
+        TreeNode childNode,
+        CallTreeNode child,
+        int allocationTypeLimit,
+        int exceptionTypeLimit,
+        bool isSpecialLeaf,
+        Action addChildren)
+    {
+        if (allocationTypeLimit > 0)
+        {
+            AddAllocationTypeNodes(childNode, child, allocationTypeLimit);
+        }
+
+        if (exceptionTypeLimit > 0)
+        {
+            AddExceptionTypeNodes(childNode, child, exceptionTypeLimit);
+        }
+
+        if (!isSpecialLeaf)
+        {
+            addChildren();
+        }
+    }
+
+    private (CallTreeNode RootNode, double RootTotal, string Title) ResolveCallTreeRoot(
+        CallTreeNode callTreeRoot,
+        double totalTime,
+        string title,
+        string? rootFilter,
+        bool includeRuntime,
+        string? rootMode)
+    {
+        var rootNode = callTreeRoot;
+        var rootTotal = totalTime;
+        if (string.IsNullOrWhiteSpace(rootFilter))
+        {
+            return (rootNode, rootTotal, title);
+        }
+
+        var matches = FindCallTreeMatches(callTreeRoot, rootFilter);
+        if (matches.Count == 0)
+        {
+            AnsiConsole.MarkupLine($"[{_theme.AccentColor}]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
+            return (rootNode, rootTotal, title);
+        }
+
+        rootNode = SelectRootMatch(matches, includeRuntime, rootMode);
+        rootTotal = GetCallTreeTime(rootNode, useSelfTime: false);
+        return (rootNode, rootTotal, $"{title} - root: {Markup.Escape(rootFilter)}");
     }
 
     private void AddAllocationTypeNodes(IHasTreeNodes parent, CallTreeNode node, int limit)

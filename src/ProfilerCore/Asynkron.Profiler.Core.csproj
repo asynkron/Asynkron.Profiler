@@ -33,6 +33,7 @@
     <Compile Include="..\ProfileTool\Heap\*.cs" Link="Heap\%(Filename)%(Extension)" />
     <Compile Include="..\ProfileTool\Rendering\NameFormatter.cs" Link="Rendering\NameFormatter.cs" />
     <Compile Include="..\ProfileTool\Rendering\CompactTreeGuide.cs" Link="Rendering\CompactTreeGuide.cs" />
+    <Compile Include="..\ProfileTool\ConsoleThemeHelpers.cs" Link="ConsoleThemeHelpers.cs" />
     <Compile Include="..\ProfileTool\Theme.cs" Link="Theme.cs" />
   </ItemGroup>
 </Project>
