@@ -20,14 +20,9 @@ internal sealed class ProfilerAllocationTreeRenderer
         _treeFactory = treeFactory;
     }
 
-    public Tree Build(
-        AllocationCallTreeResult callTree,
-        string? callTreeRoot,
-        bool includeRuntime,
-        int callTreeDepth,
-        int callTreeWidth,
-        int callTreeSiblingCutoffPercent)
+    public Tree Build(ProfilerAllocationCallTreeRequest request)
     {
+        var callTree = request.CallTree;
         var rootLabel = callTree.TypeRoots.Count > 0
             ? NameFormatter.FormatTypeDisplayName(callTree.TypeRoots[0].Name)
             : "Allocations";
@@ -35,14 +30,13 @@ internal sealed class ProfilerAllocationTreeRenderer
             ? callTree.TypeRoots[0]
             : new AllocationCallTreeNode(rootLabel);
 
-        if (!string.IsNullOrWhiteSpace(callTreeRoot))
+        if (!string.IsNullOrWhiteSpace(request.RootFilter))
         {
-            var matchingRoots = callTree.TypeRoots
-                .Where(root => root.Name.Contains(callTreeRoot, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (matchingRoots.Count > 0)
+            var matchingRoot = callTree.TypeRoots.FirstOrDefault(
+                root => root.Name.Contains(request.RootFilter, StringComparison.OrdinalIgnoreCase));
+            if (matchingRoot != null)
             {
-                rootNode = matchingRoots[0];
+                rootNode = matchingRoot;
             }
         }
 
@@ -51,11 +45,9 @@ internal sealed class ProfilerAllocationTreeRenderer
             tree,
             rootNode,
             rootNode.TotalBytes,
-            includeRuntime,
+            request.IncludeRuntime,
             depth: 1,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeSiblingCutoffPercent);
+            request.Traversal);
         return tree;
     }
 
@@ -65,24 +57,22 @@ internal sealed class ProfilerAllocationTreeRenderer
         long rootTotalBytes,
         bool includeRuntime,
         int depth,
-        int maxDepth,
-        int maxWidth,
-        int siblingCutoffPercent)
+        CallTreeTraversalSettings traversal)
     {
-        if (depth > maxDepth)
+        if (depth > traversal.MaxDepth)
         {
             return;
         }
 
-        var children = GetVisibleChildren(node, includeRuntime, maxWidth, siblingCutoffPercent);
+        var children = GetVisibleChildren(node, includeRuntime, traversal);
         foreach (var child in children)
         {
             var nextDepth = depth + 1;
             var isSpecialLeaf = ShouldStopAtLeaf(FormatFunctionDisplayName(child.Name));
-            var childChildren = !isSpecialLeaf && nextDepth <= maxDepth
-                ? GetVisibleChildren(child, includeRuntime, maxWidth, siblingCutoffPercent)
+            var childChildren = !isSpecialLeaf && nextDepth <= traversal.MaxDepth
+                ? GetVisibleChildren(child, includeRuntime, traversal)
                 : new List<AllocationCallTreeNode>();
-            var isLeaf = isSpecialLeaf || nextDepth > maxDepth || childChildren.Count == 0;
+            var isLeaf = isSpecialLeaf || nextDepth > traversal.MaxDepth || childChildren.Count == 0;
 
             var childNode = parent.AddNode(_formatter.FormatAllocationCallTreeLine(child, rootTotalBytes, isRoot: false, isLeaf));
             if (!isSpecialLeaf)
@@ -93,9 +83,7 @@ internal sealed class ProfilerAllocationTreeRenderer
                     rootTotalBytes,
                     includeRuntime,
                     nextDepth,
-                    maxDepth,
-                    maxWidth,
-                    siblingCutoffPercent);
+                    traversal);
             }
         }
     }
@@ -103,52 +91,16 @@ internal sealed class ProfilerAllocationTreeRenderer
     private static List<AllocationCallTreeNode> GetVisibleChildren(
         AllocationCallTreeNode node,
         bool includeRuntime,
-        int maxWidth,
-        int siblingCutoffPercent)
+        CallTreeTraversalSettings traversal)
     {
-        var ordered = EnumerateVisibleChildren(node, includeRuntime)
-            .OrderByDescending(child => child.TotalBytes)
-            .ToList();
-
-        if (ordered.Count == 0)
-        {
-            return ordered;
-        }
-
-        if (siblingCutoffPercent <= 0)
-        {
-            return ordered.Take(maxWidth).ToList();
-        }
-
-        var topBytes = ordered[0].TotalBytes;
-        if (topBytes <= 0)
-        {
-            return ordered.Take(maxWidth).ToList();
-        }
-
-        var minBytes = topBytes * siblingCutoffPercent / 100d;
-        return ordered
-            .Where(child => child.TotalBytes >= minBytes)
-            .Take(maxWidth)
-            .ToList();
-    }
-
-    private static IEnumerable<AllocationCallTreeNode> EnumerateVisibleChildren(
-        AllocationCallTreeNode node,
-        bool includeRuntime)
-    {
-        foreach (var child in node.Children.Values)
-        {
-            if (includeRuntime || !IsRuntimeNoise(child.Name))
-            {
-                yield return child;
-                continue;
-            }
-
-            foreach (var grandChild in EnumerateVisibleChildren(child, includeRuntime))
-            {
-                yield return grandChild;
-            }
-        }
+        return TreeVisibilityFilter.SelectTopChildren(
+            TreeVisibilityFilter.EnumerateVisibleChildren(
+                node.Children.Values,
+                includeRuntime,
+                child => IsRuntimeNoise(child.Name),
+                child => child.Children.Values),
+            child => child.TotalBytes,
+            traversal.MaxWidth,
+            traversal.SiblingCutoffPercent).ToList();
     }
 }
