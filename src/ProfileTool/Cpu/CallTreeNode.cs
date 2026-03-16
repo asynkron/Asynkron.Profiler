@@ -99,6 +99,14 @@ public sealed class CallTreeNode
         ExceptionCount += count;
     }
 
+    public void IncrementCalls()
+    {
+        if (Calls < int.MaxValue)
+        {
+            Calls += 1;
+        }
+    }
+
     public void AddException(string typeName, long count)
     {
         if (count <= 0)

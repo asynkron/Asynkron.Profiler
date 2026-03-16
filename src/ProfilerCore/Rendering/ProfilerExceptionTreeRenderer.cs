@@ -10,6 +10,7 @@ internal sealed class ProfilerExceptionTreeRenderer
     private readonly Theme _theme;
     private readonly ProfilerCallTreeFormatter _formatter;
     private readonly ProfilerTreeFactory _treeFactory;
+    private readonly ProfilerCallTreeRootResolver _rootResolver;
 
     public ProfilerExceptionTreeRenderer(
         Theme theme,
@@ -19,6 +20,7 @@ internal sealed class ProfilerExceptionTreeRenderer
         _theme = theme;
         _formatter = formatter;
         _treeFactory = treeFactory;
+        _rootResolver = new ProfilerCallTreeRootResolver(theme);
     }
 
     public Rows Build(
@@ -33,40 +35,26 @@ internal sealed class ProfilerExceptionTreeRenderer
         string? rootMode,
         int siblingCutoffPercent)
     {
-        maxDepth = Math.Max(1, maxDepth);
-        maxWidth = Math.Max(1, maxWidth);
-        siblingCutoffPercent = Math.Max(0, siblingCutoffPercent);
+        var traversal = CallTreeTraversalSettings.Create(maxDepth, maxWidth, siblingCutoffPercent);
+        var rootSelection = _rootResolver.Resolve(
+            callTreeRoot,
+            totalCount,
+            title,
+            rootFilter,
+            includeRuntime,
+            rootMode);
 
-        var rootNode = callTreeRoot;
-        var rootTotal = (double)totalCount;
-        if (!string.IsNullOrWhiteSpace(rootFilter))
-        {
-            var matches = FindCallTreeMatches(callTreeRoot, rootFilter);
-            if (matches.Count > 0)
-            {
-                rootNode = SelectRootMatch(matches, includeRuntime, rootMode);
-                rootTotal = GetCallTreeTime(rootNode, useSelfTime: false);
-                title = $"{title} - root: {Markup.Escape(rootFilter)}";
-            }
-            else
-            {
-                AnsiConsole.MarkupLine($"[{_theme.AccentColor}]No call tree nodes matched '{Markup.Escape(rootFilter)}'. Showing full tree.[/]");
-            }
-        }
-
-        var tree = _treeFactory.Create(_formatter.FormatExceptionCallTreeLine(rootNode, rootTotal, isRoot: true, rootLabelOverride));
+        var tree = _treeFactory.Create(_formatter.FormatExceptionCallTreeLine(rootSelection.RootNode, rootSelection.RootTotal, isRoot: true, rootLabelOverride));
         AddChildNodes(
             tree,
-            rootNode,
-            rootTotal,
+            rootSelection.RootNode,
+            rootSelection.RootTotal,
             includeRuntime,
             childDepth: 1,
-            maxDepth,
-            maxWidth,
-            siblingCutoffPercent);
+            traversal);
 
         return new Rows(
-            new Markup($"[bold {_theme.AccentColor}]{title}[/]"),
+            new Markup($"[bold {_theme.AccentColor}]{rootSelection.Title}[/]"),
             tree);
     }
 
@@ -76,22 +64,20 @@ internal sealed class ProfilerExceptionTreeRenderer
         double totalCount,
         bool includeRuntime,
         int childDepth,
-        int maxDepth,
-        int maxWidth,
-        int siblingCutoffPercent)
+        CallTreeTraversalSettings traversal)
     {
-        if (childDepth > maxDepth)
+        if (childDepth > traversal.MaxDepth)
         {
             return;
         }
 
-        var children = GetVisibleChildren(node, includeRuntime, maxWidth, siblingCutoffPercent);
+        var children = GetVisibleChildren(node, includeRuntime, traversal);
         foreach (var child in children)
         {
             var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
             var hasVisibleChildren = !isSpecialLeaf &&
-                childDepth < maxDepth &&
-                GetVisibleChildren(child, includeRuntime, maxWidth, siblingCutoffPercent).Count > 0;
+                childDepth < traversal.MaxDepth &&
+                GetVisibleChildren(child, includeRuntime, traversal).Count > 0;
             var childNode = parent.AddNode(_formatter.FormatExceptionCallTreeLine(
                 child,
                 totalCount,
@@ -107,9 +93,7 @@ internal sealed class ProfilerExceptionTreeRenderer
                     totalCount,
                     includeRuntime,
                     childDepth + 1,
-                    maxDepth,
-                    maxWidth,
-                    siblingCutoffPercent);
+                    traversal);
             }
         }
     }
@@ -117,14 +101,13 @@ internal sealed class ProfilerExceptionTreeRenderer
     private static IReadOnlyList<CallTreeNode> GetVisibleChildren(
         CallTreeNode node,
         bool includeRuntime,
-        int maxWidth,
-        int siblingCutoffPercent)
+        CallTreeTraversalSettings traversal)
     {
         return CallTreeVisibility.GetVisibleChildren(
             node,
             includeRuntime,
             useSelfTime: false,
-            maxWidth,
-            siblingCutoffPercent);
+            traversal.MaxWidth,
+            traversal.SiblingCutoffPercent);
     }
 }

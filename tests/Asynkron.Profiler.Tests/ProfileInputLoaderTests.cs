@@ -100,6 +100,14 @@ public sealed class ProfileInputLoaderTests
         }
     }
 
+    [Fact]
+    public void BuildInputLabel_FallsBackToInputWhenFileNameIsMissing()
+    {
+        var label = ProfileInputLoader.BuildInputLabel(string.Empty);
+
+        Assert.Equal("input", label);
+    }
+
     private static void AssertModes(
         string inputPath,
         bool expectedCpu,

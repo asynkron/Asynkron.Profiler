@@ -212,18 +212,7 @@ internal sealed class ProfileInputLoader
 
     public static string BuildInputLabel(string inputPath)
     {
-        var name = Path.GetFileNameWithoutExtension(inputPath);
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            name = "input";
-        }
-
-        foreach (var invalid in Path.GetInvalidFileNameChars())
-        {
-            name = name.Replace(invalid, '_');
-        }
-
-        return name;
+        return FileLabelSanitizer.Sanitize(Path.GetFileNameWithoutExtension(inputPath), "input");
     }
 
     public static void ApplyInputDefaults(

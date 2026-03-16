@@ -325,18 +325,7 @@ internal sealed partial class ProjectResolver
             return "command";
         }
 
-        var name = Path.GetFileNameWithoutExtension(command[0]);
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            name = "command";
-        }
-
-        foreach (var invalid in Path.GetInvalidFileNameChars())
-        {
-            name = name.Replace(invalid, '_');
-        }
-
-        return name;
+        return FileLabelSanitizer.Sanitize(Path.GetFileNameWithoutExtension(command[0]), "command");
     }
 
     private static string BuildCommandDescription(string[] command)
