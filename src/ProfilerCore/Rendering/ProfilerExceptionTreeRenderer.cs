@@ -23,33 +23,27 @@ internal sealed class ProfilerExceptionTreeRenderer
         _rootResolver = new ProfilerCallTreeRootResolver(theme);
     }
 
-    public Rows Build(
-        CallTreeNode callTreeRoot,
-        long totalCount,
-        string title,
-        string? rootLabelOverride,
-        string? rootFilter,
-        bool includeRuntime,
-        int maxDepth,
-        int maxWidth,
-        string? rootMode,
-        int siblingCutoffPercent)
+    public Rows Build(ProfilerExceptionCallTreeRequest request)
     {
-        var traversal = CallTreeTraversalSettings.Create(maxDepth, maxWidth, siblingCutoffPercent);
+        var traversal = request.Options.ToTraversalSettings();
         var rootSelection = _rootResolver.Resolve(
-            callTreeRoot,
-            totalCount,
-            title,
-            rootFilter,
-            includeRuntime,
-            rootMode);
+            request.CallTreeRoot,
+            request.TotalCount,
+            request.Title,
+            request.Options.RootFilter,
+            request.Options.IncludeRuntime,
+            request.Options.RootMode);
 
-        var tree = _treeFactory.Create(_formatter.FormatExceptionCallTreeLine(rootSelection.RootNode, rootSelection.RootTotal, isRoot: true, rootLabelOverride));
+        var tree = _treeFactory.Create(_formatter.FormatExceptionCallTreeLine(
+            rootSelection.RootNode,
+            rootSelection.RootTotal,
+            isRoot: true,
+            request.RootLabelOverride));
         AddChildNodes(
             tree,
             rootSelection.RootNode,
             rootSelection.RootTotal,
-            includeRuntime,
+            request.Options.IncludeRuntime,
             childDepth: 1,
             traversal);
 

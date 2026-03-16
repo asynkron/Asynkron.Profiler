@@ -145,46 +145,14 @@ internal sealed class ProfilerCallTreeRenderer
         return BuildStandardTreeRows(rootSelection.RootNode, rootSelection.Title, context);
     }
 
-    public Rows BuildExceptionCallTree(
-        CallTreeNode callTreeRoot,
-        long totalCount,
-        string title,
-        string? rootLabelOverride,
-        string? rootFilter,
-        bool includeRuntime,
-        int maxDepth,
-        int maxWidth,
-        string? rootMode,
-        int siblingCutoffPercent)
+    public Rows BuildExceptionCallTree(ProfilerExceptionCallTreeRequest request)
     {
-        return _exceptionRenderer.Build(
-            callTreeRoot,
-            totalCount,
-            title,
-            rootLabelOverride,
-            rootFilter,
-            includeRuntime,
-            maxDepth,
-            maxWidth,
-            rootMode,
-            siblingCutoffPercent);
+        return _exceptionRenderer.Build(request);
     }
 
-    public void PrintAllocationCallTree(
-        AllocationCallTreeResult callTree,
-        string? callTreeRoot,
-        bool includeRuntime,
-        int callTreeDepth,
-        int callTreeWidth,
-        int callTreeSiblingCutoffPercent)
+    public void PrintAllocationCallTree(ProfilerAllocationCallTreeRequest request)
     {
-        AnsiConsole.Write(_allocationRenderer.Build(
-            callTree,
-            callTreeRoot,
-            includeRuntime,
-            callTreeDepth,
-            callTreeWidth,
-            callTreeSiblingCutoffPercent));
+        AnsiConsole.Write(_allocationRenderer.Build(request));
     }
 
     public string HighlightJitNumbers(string text) => _formatter.HighlightJitNumbers(text);

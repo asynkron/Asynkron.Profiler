@@ -244,13 +244,14 @@ public sealed class ProfilerConsoleRenderer
         if (results.AllocationCallTree != null)
         {
             ConsoleThemeHelpers.PrintSection("Allocation Call Tree (Sampled)");
-            _callTreeRenderer.PrintAllocationCallTree(
+            _callTreeRenderer.PrintAllocationCallTree(new ProfilerAllocationCallTreeRequest(
                 results.AllocationCallTree,
                 request.CallTreeRoot,
                 request.IncludeRuntime,
-                request.CallTreeDepth,
-                request.CallTreeWidth,
-                request.CallTreeSiblingCutoffPercent);
+                CallTreeTraversalSettings.Create(
+                    request.CallTreeDepth,
+                    request.CallTreeWidth,
+                    request.CallTreeSiblingCutoffPercent)));
         }
     }
 
@@ -351,17 +352,12 @@ public sealed class ProfilerConsoleRenderer
         if (summaryThrown > 0)
         {
             var resolvedRoot = ResolveCallTreeRootFilter(request.CallTreeRoot);
-            AnsiConsole.Write(_callTreeRenderer.BuildExceptionCallTree(
+            AnsiConsole.Write(_callTreeRenderer.BuildExceptionCallTree(new ProfilerExceptionCallTreeRequest(
                 selectedDetails?.ThrowRoot ?? results.ThrowCallTreeRoot,
                 summaryThrown,
                 "Call Tree (Thrown Exceptions)",
                 selectedType != null ? NameFormatter.FormatTypeDisplayName(selectedType) : null,
-                resolvedRoot,
-                request.IncludeRuntime,
-                request.CallTreeDepth,
-                request.CallTreeWidth,
-                request.CallTreeRootMode,
-                request.CallTreeSiblingCutoffPercent));
+                BuildTreeRootSelectionOptions(request, resolvedRoot))));
         }
 
         var catchSites = selectedDetails?.CatchSites ?? results.CatchSites;
@@ -401,17 +397,12 @@ public sealed class ProfilerConsoleRenderer
             }
 
             var resolvedRoot = ResolveCallTreeRootFilter(request.CallTreeRoot);
-            AnsiConsole.Write(_callTreeRenderer.BuildExceptionCallTree(
+            AnsiConsole.Write(_callTreeRenderer.BuildExceptionCallTree(new ProfilerExceptionCallTreeRequest(
                 catchRoot,
                 summaryCaught,
                 "Call Tree (Catch Sites)",
                 selectedType != null ? NameFormatter.FormatTypeDisplayName(selectedType) : null,
-                resolvedRoot,
-                request.IncludeRuntime,
-                request.CallTreeDepth,
-                request.CallTreeWidth,
-                request.CallTreeRootMode,
-                request.CallTreeSiblingCutoffPercent));
+                BuildTreeRootSelectionOptions(request, resolvedRoot))));
         }
     }
 
@@ -552,6 +543,19 @@ public sealed class ProfilerConsoleRenderer
     private static string? ResolveCallTreeRootFilter(string? rootFilter)
     {
         return string.IsNullOrWhiteSpace(rootFilter) ? null : rootFilter;
+    }
+
+    private static ProfilerTreeRootSelectionOptions BuildTreeRootSelectionOptions(
+        ProfileRenderRequest request,
+        string? rootFilter)
+    {
+        return new ProfilerTreeRootSelectionOptions(
+            rootFilter,
+            request.IncludeRuntime,
+            request.CallTreeDepth,
+            request.CallTreeWidth,
+            request.CallTreeRootMode,
+            request.CallTreeSiblingCutoffPercent);
     }
 
     private static bool MatchesFunctionFilter(string name, string? filter)
