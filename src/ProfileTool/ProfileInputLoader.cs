@@ -180,7 +180,7 @@ internal sealed class ProfileInputLoader
         }
     }
 
-    public MemoryProfileResult BuildMemoryProfileResult(AllocationCallTreeResult callTree)
+    public static MemoryProfileResult BuildMemoryProfileResult(AllocationCallTreeResult callTree)
     {
         var allocationEntries = callTree.TypeRoots
             .OrderByDescending(root => root.TotalBytes)

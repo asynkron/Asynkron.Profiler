@@ -1,0 +1,165 @@
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using Spectre.Console;
+using Spectre.Console.Rendering;
+
+namespace Asynkron.Profiler;
+
+internal sealed class ProfilerConsoleTableWriter
+{
+    private static readonly TableColumnSpec[] SummaryColumns =
+    {
+        new(string.Empty),
+        new(string.Empty)
+    };
+
+    private readonly Theme _theme;
+
+    public ProfilerConsoleTableWriter(Theme theme)
+    {
+        _theme = theme;
+    }
+
+    public static Table BuildTableWithRows(
+        IReadOnlyList<TableColumnSpec> columns,
+        IEnumerable<IReadOnlyList<string>> rows,
+        string? title = null,
+        bool hideHeaders = false,
+        string? headerColor = null)
+    {
+        var table = BuildTable(columns, title, hideHeaders, headerColor);
+        foreach (var row in rows)
+        {
+            table.AddRow(row.ToArray());
+        }
+
+        return table;
+    }
+
+    public static void WriteTable(
+        IReadOnlyList<TableColumnSpec> columns,
+        IEnumerable<IReadOnlyList<string>> rows,
+        string? title = null,
+        bool hideHeaders = false,
+        string? headerColor = null)
+    {
+        AnsiConsole.Write(BuildTableWithRows(columns, rows, title, hideHeaders, headerColor));
+    }
+
+    public static void WriteSummaryTable(IEnumerable<IReadOnlyList<string>> rows)
+    {
+        ConsoleThemeHelpers.PrintSection("Summary");
+        WriteTable(SummaryColumns, rows, hideHeaders: true);
+    }
+
+    public static Rows BuildTableBlock(Table table, string title, string color)
+    {
+        return new Rows(
+            new Markup($"[{color}]{Markup.Escape(title)}[/]"),
+            table);
+    }
+
+    public Table? BuildAllocationTable(IReadOnlyList<AllocationEntry> entries, string? allocationTotal)
+    {
+        if (entries.Count == 0)
+        {
+            return null;
+        }
+
+        long totalCount = 0;
+        var rows = new List<IReadOnlyList<string>>();
+
+        foreach (var entry in entries)
+        {
+            var typeName = NameFormatter.FormatTypeDisplayName(entry.Type);
+            if (typeName.Length > 80)
+            {
+                typeName = typeName[..77] + "...";
+            }
+
+            var count = entry.Count;
+            var totalText = entry.Total ?? string.Empty;
+            var paddedTotalText = totalText.Length == 0 ? totalText : " " + totalText;
+
+            totalCount += count;
+
+            var countText = count.ToString("N0", CultureInfo.InvariantCulture);
+            rows.Add(new[]
+            {
+                $"[{_theme.TextColor}]{Markup.Escape(typeName)}[/]",
+                $"[{_theme.MemoryCountColor}]{Markup.Escape(countText)}[/]",
+                $"[{_theme.MemoryValueColor}]{Markup.Escape(paddedTotalText)}[/]"
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(allocationTotal))
+        {
+            var countText = totalCount.ToString("N0", CultureInfo.InvariantCulture);
+            var paddedAllocationTotal = " " + allocationTotal;
+            rows.Add(new[]
+            {
+                $"[bold {_theme.TextColor}]TOTAL (shown)[/]",
+                $"[bold {_theme.MemoryCountColor}]{Markup.Escape(countText)}[/]",
+                $"[bold {_theme.MemoryValueColor}]{Markup.Escape(paddedAllocationTotal)}[/]"
+            });
+        }
+
+        return BuildTableWithRows(
+            new[]
+            {
+                new TableColumnSpec("Type"),
+                new TableColumnSpec("Count", RightAligned: true),
+                new TableColumnSpec(" Total", RightAligned: true)
+            },
+            rows);
+    }
+
+    public void PrintAllocationTable(IReadOnlyList<AllocationEntry> entries, string? allocationTotal)
+    {
+        var table = BuildAllocationTable(entries, allocationTotal);
+        if (table == null)
+        {
+            return;
+        }
+
+        AnsiConsole.Write(table);
+    }
+
+    private static Table BuildTable(
+        IReadOnlyList<TableColumnSpec> columns,
+        string? title = null,
+        bool hideHeaders = false,
+        string? headerColor = null)
+    {
+        var table = new Table
+        {
+            Expand = false,
+            ShowHeaders = !hideHeaders,
+            ShowRowSeparators = false,
+            Title = title != null ? new TableTitle(title) : null
+        };
+
+        table.Border(TableBorder.Rounded);
+        table.BorderStyle(new Style(Color.Grey));
+
+        foreach (var column in columns)
+        {
+            var columnHeader = column.Header;
+            if (!string.IsNullOrWhiteSpace(headerColor))
+            {
+                columnHeader = $"[{headerColor}]{Markup.Escape(columnHeader)}[/]";
+            }
+
+            var tableColumn = new TableColumn(columnHeader);
+            if (column.RightAligned)
+            {
+                tableColumn.RightAligned();
+            }
+
+            table.AddColumn(tableColumn);
+        }
+
+        return table;
+    }
+}

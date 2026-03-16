@@ -411,7 +411,7 @@ MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
         return null;
     }
 
-    return profileInputLoader.BuildMemoryProfileResult(callTree);
+    return ProfileInputLoader.BuildMemoryProfileResult(callTree);
 }
 ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
 {
