@@ -1,5 +1,5 @@
 {
-  "total_patterns": 36,
+  "total_patterns": 32,
   "patterns": [
     {
       "hash": "d9fb57fb1e89fa27",
@@ -192,29 +192,6 @@
       ]
     },
     {
-      "hash": "365ed84c4a8ac1f9",
-      "score": 2,
-      "complexity": 3,
-      "rank": 5,
-      "lines": 10,
-      "similarity": 0.8574879227053139,
-      "occurrences": 3,
-      "locations": [
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 528
-        },
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 579
-        },
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 592
-        }
-      ]
-    },
-    {
       "hash": "3eca202e539100e4",
       "score": 4,
       "complexity": 1,
@@ -228,8 +205,8 @@
           "line_start": 334
         },
         {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 1444
+          "filename": "src/ProfileTool/ProfileInputLoader.cs",
+          "line_start": 221
         }
       ]
     },
@@ -272,21 +249,21 @@
       ]
     },
     {
-      "hash": "5f0634106fa97807",
-      "score": 2,
-      "complexity": 3,
+      "hash": "656df1f750e387f2",
+      "score": 3,
+      "complexity": 2,
       "rank": 5,
-      "lines": 14,
-      "similarity": 0.875,
+      "lines": 4,
+      "similarity": 1,
       "occurrences": 2,
       "locations": [
         {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 509
+          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
+          "line_start": 55
         },
         {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 560
+          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
+          "line_start": 69
         }
       ]
     },
@@ -306,25 +283,6 @@
         {
           "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
           "line_start": 104
-        }
-      ]
-    },
-    {
-      "hash": "656df1f750e387f2",
-      "score": 3,
-      "complexity": 2,
-      "rank": 5,
-      "lines": 4,
-      "similarity": 1,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
-          "line_start": 55
-        },
-        {
-          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
-          "line_start": 69
         }
       ]
     },
@@ -409,25 +367,6 @@
       ]
     },
     {
-      "hash": "a9e55a6336d29e2e",
-      "score": 2,
-      "complexity": 3,
-      "rank": 5,
-      "lines": 13,
-      "similarity": 0.875,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 510
-        },
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 561
-        }
-      ]
-    },
-    {
       "hash": "b1bd91b43b021c60",
       "score": 4,
       "complexity": 1,
@@ -495,11 +434,11 @@
       "locations": [
         {
           "filename": "src/ProfileTool/Program.cs",
-          "line_start": 818
+          "line_start": 639
         },
         {
           "filename": "src/ProfileTool/Program.cs",
-          "line_start": 918
+          "line_start": 739
         }
       ]
     },
@@ -519,29 +458,6 @@
         {
           "filename": "src/ProfilerCore/Rendering/ProfilerConsoleRenderer.cs",
           "line_start": 1453
-        }
-      ]
-    },
-    {
-      "hash": "dfa565ed1b242e22",
-      "score": 2,
-      "complexity": 3,
-      "rank": 5,
-      "lines": 11,
-      "similarity": 0.8574879227053139,
-      "occurrences": 3,
-      "locations": [
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 527
-        },
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 578
-        },
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 591
         }
       ]
     },
@@ -574,12 +490,12 @@
       "occurrences": 2,
       "locations": [
         {
-          "filename": "src/ProfileTool/Cpu/CallTreeFilters.cs",
-          "line_start": 8
-        },
-        {
           "filename": "src/ProfilerCore/Rendering/CallTreeVisibility.cs",
           "line_start": 6
+        },
+        {
+          "filename": "src/ProfileTool/Cpu/CallTreeFilters.cs",
+          "line_start": 8
         }
       ]
     },
@@ -594,11 +510,11 @@
       "locations": [
         {
           "filename": "src/ProfileTool/Program.cs",
-          "line_start": 405
+          "line_start": 379
         },
         {
           "filename": "src/ProfileTool/Program.cs",
-          "line_start": 1723
+          "line_start": 1459
         }
       ]
     },
@@ -612,12 +528,12 @@
       "occurrences": 2,
       "locations": [
         {
-          "filename": "src/ProfileTool/Rendering/NameFormatter.cs",
-          "line_start": 188
-        },
-        {
           "filename": "src/ProfileTool/Cpu/CallTreeHelpers.cs",
           "line_start": 187
+        },
+        {
+          "filename": "src/ProfileTool/Rendering/NameFormatter.cs",
+          "line_start": 188
         }
       ]
     },
