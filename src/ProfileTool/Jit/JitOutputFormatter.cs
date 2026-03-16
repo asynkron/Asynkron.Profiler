@@ -310,7 +310,7 @@ internal sealed partial class JitOutputFormatter
             $"[{_theme.CpuCountColor}]{Markup.Escape(value)}[/]");
     }
 
-    private string ColorizeInstructionSegment(string value, string mnemonicColor, string numberColor)
+    private static string ColorizeInstructionSegment(string value, string mnemonicColor, string numberColor)
     {
         if (string.IsNullOrWhiteSpace(value))
         {

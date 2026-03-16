@@ -11,155 +11,43 @@ public sealed class ProjectResolverTests
     [Fact]
     public void ResolvesSingleTargetFrameworkProject()
     {
-        var root = CreateTempDirectory();
-        try
+        WithStandaloneProject(project =>
         {
-            var projectDir = Path.Combine(root, "App");
-            Directory.CreateDirectory(projectDir);
-            var projectPath = Path.Combine(projectDir, "App.csproj");
-            File.WriteAllText(projectPath, "<Project />");
-
-            var targetPath = Path.Combine(projectDir, "bin", "Release", "net8.0", "App.dll");
-
-            (bool Success, string StdOut, string StdErr) RunProcess(
-                string fileName,
-                IEnumerable<string> args,
-                string? workingDir,
-                int timeoutMs)
-            {
-                var argList = args.ToList();
-                if (argList.Contains("build"))
-                {
-                    return (true, string.Empty, string.Empty);
-                }
-
-                if (argList.Contains("msbuild"))
-                {
-                    var output = BuildMsbuildOutput(
-                        "TargetFramework=net8.0",
-                        "TargetFrameworks=",
-                        "OutputType=Exe",
-                        $"TargetPath={targetPath}");
-                    return (true, output, string.Empty);
-                }
-
-                return (false, string.Empty, "Unexpected command");
-            }
-
-            var resolver = new ProjectResolver(RunProcess);
-            var resolved = resolver.Resolve(new[] { projectPath }, null);
+            var resolver = CreateProjectResolver(project, targetFrameworks: string.Empty);
+            var resolved = resolver.Resolve([project.ProjectPath], null);
 
             Assert.NotNull(resolved);
-            Assert.Equal(new[] { "dotnet", targetPath }, resolved!.Command);
+            Assert.Equal(new[] { "dotnet", project.GetTargetPath("net8.0") }, resolved!.Command);
             Assert.Equal("App", resolved.Label);
-            Assert.Equal($"{Path.GetFullPath(projectPath)} (Release, net8.0)", resolved.Description);
-        }
-        finally
-        {
-            SafeDeleteDirectory(root);
-        }
+            Assert.Equal($"{Path.GetFullPath(project.ProjectPath)} (Release, net8.0)", resolved.Description);
+        });
     }
 
     [Fact]
     public void RequiresTargetFrameworkWhenMultiple()
     {
-        var root = CreateTempDirectory();
-        try
+        WithStandaloneProject(project =>
         {
-            var projectDir = Path.Combine(root, "App");
-            Directory.CreateDirectory(projectDir);
-            var projectPath = Path.Combine(projectDir, "App.csproj");
-            File.WriteAllText(projectPath, "<Project />");
-
-            var targetPath = Path.Combine(projectDir, "bin", "Release", "net8.0", "App.dll");
-
-            (bool Success, string StdOut, string StdErr) RunProcess(
-                string fileName,
-                IEnumerable<string> args,
-                string? workingDir,
-                int timeoutMs)
-            {
-                var argList = args.ToList();
-                if (argList.Contains("build"))
-                {
-                    return (true, string.Empty, string.Empty);
-                }
-
-                if (argList.Contains("msbuild"))
-                {
-                    var output = BuildMsbuildOutput(
-                        "TargetFramework=net8.0",
-                        "TargetFrameworks=net8.0;net9.0",
-                        "OutputType=Exe",
-                        $"TargetPath={targetPath}");
-                    return (true, output, string.Empty);
-                }
-
-                return (false, string.Empty, "Unexpected command");
-            }
-
-            var resolver = new ProjectResolver(RunProcess);
-            var resolved = resolver.Resolve(new[] { projectPath }, null);
+            var resolver = CreateProjectResolver(project, "net8.0;net9.0");
+            var resolved = resolver.Resolve([project.ProjectPath], null);
 
             Assert.Null(resolved);
-        }
-        finally
-        {
-            SafeDeleteDirectory(root);
-        }
+        });
     }
 
     [Fact]
     public void ResolvesMultiTargetFrameworkWhenSpecified()
     {
-        var root = CreateTempDirectory();
-        try
+        WithStandaloneProject(project =>
         {
-            var projectDir = Path.Combine(root, "App");
-            Directory.CreateDirectory(projectDir);
-            var projectPath = Path.Combine(projectDir, "App.csproj");
-            File.WriteAllText(projectPath, "<Project />");
-
-            (bool Success, string StdOut, string StdErr) RunProcess(
-                string fileName,
-                IEnumerable<string> args,
-                string? workingDir,
-                int timeoutMs)
-            {
-                var argList = args.ToList();
-                if (argList.Contains("build"))
-                {
-                    return (true, string.Empty, string.Empty);
-                }
-
-                if (argList.Contains("msbuild"))
-                {
-                    var tfmArg = argList.FirstOrDefault(arg =>
-                        arg.StartsWith("-property:TargetFramework=", StringComparison.OrdinalIgnoreCase));
-                    var tfm = tfmArg?.Split('=', 2)[1] ?? "net8.0";
-                    var targetPath = Path.Combine(projectDir, "bin", "Release", tfm, "App.dll");
-                    var output = BuildMsbuildOutput(
-                        $"TargetFramework={tfm}",
-                        "TargetFrameworks=net8.0;net9.0",
-                        "OutputType=Exe",
-                        $"TargetPath={targetPath}");
-                    return (true, output, string.Empty);
-                }
-
-                return (false, string.Empty, "Unexpected command");
-            }
-
-            var resolver = new ProjectResolver(RunProcess);
-            var resolved = resolver.Resolve(new[] { projectPath }, "net9.0");
+            var resolver = CreateProjectResolver(project, "net8.0;net9.0");
+            var resolved = resolver.Resolve([project.ProjectPath], "net9.0");
 
             Assert.NotNull(resolved);
-            Assert.Equal(new[] { "dotnet", Path.Combine(projectDir, "bin", "Release", "net9.0", "App.dll") }, resolved!.Command);
-        }
-        finally
-        {
-            SafeDeleteDirectory(root);
-        }
+            Assert.Equal(new[] { "dotnet", project.GetTargetPath("net9.0") }, resolved!.Command);
+        });
     }
+
     private static readonly string[] SolutionProjects =
     [
         "Project(\"{00000000-0000-0000-0000-000000000000}\") = \"App\", \"src\\\\App\\\\App.csproj\", \"{11111111-1111-1111-1111-111111111111}\"",
@@ -170,6 +58,73 @@ public sealed class ProjectResolverTests
 
     [Fact]
     public void ResolvesSolutionExecutableProject()
+    {
+        WithSolutionProjects(projects =>
+        {
+            var resolver = CreateSolutionResolver(projects);
+            var resolved = resolver.Resolve([projects.SolutionPath], null);
+
+            Assert.NotNull(resolved);
+            Assert.Equal(new[] { "dotnet", projects.AppTargetPath }, resolved!.Command);
+            Assert.Equal("App", resolved.Label);
+        });
+    }
+
+    private static string BuildMsbuildOutput(params string[] lines)
+    {
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static string CreateTempDirectory()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "AsynkronProfilerTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static void WithStandaloneProject(Action<TestProject> assert)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var projectDir = Path.Combine(root, "App");
+            Directory.CreateDirectory(projectDir);
+            var projectPath = Path.Combine(projectDir, "App.csproj");
+            File.WriteAllText(projectPath, "<Project />");
+            assert(new TestProject(root, projectDir, projectPath));
+        }
+        finally
+        {
+            SafeDeleteDirectory(root);
+        }
+    }
+
+    private static ProjectResolver CreateProjectResolver(TestProject project, string targetFrameworks)
+    {
+        return new ProjectResolver((_, args, _, _) =>
+        {
+            var argList = args.ToList();
+            if (argList.Contains("build"))
+            {
+                return (true, string.Empty, string.Empty);
+            }
+
+            if (argList.Contains("msbuild"))
+            {
+                var tfm = GetRequestedTargetFramework(argList) ?? "net8.0";
+                var output = BuildMsbuildOutput(
+                    $"TargetFramework={tfm}",
+                    $"TargetFrameworks={targetFrameworks}",
+                    "OutputType=Exe",
+                    $"TargetPath={project.GetTargetPath(tfm)}");
+                return (true, output, string.Empty);
+            }
+
+            return (false, string.Empty, "Unexpected command");
+        });
+    }
+
+    private static void WithSolutionProjects(Action<SolutionProjectsFixture> assert)
     {
         var root = CreateTempDirectory();
         try
@@ -183,57 +138,13 @@ public sealed class ProjectResolverTests
 
             var solutionPath = Path.Combine(root, "App.sln");
             File.WriteAllText(solutionPath, string.Join(Environment.NewLine, SolutionProjects));
-
-            var appTargetPath = Path.Combine(root, "src", "App", "bin", "Release", "net8.0", "App.dll");
-            var libTargetPath = Path.Combine(root, "src", "Lib", "bin", "Release", "net8.0", "Lib.dll");
-            var appFullPath = Path.GetFullPath(appProjectPath);
-            var libFullPath = Path.GetFullPath(libProjectPath);
-
-            (bool Success, string StdOut, string StdErr) RunProcess(
-                string fileName,
-                IEnumerable<string> args,
-                string? workingDir,
-                int timeoutMs)
-            {
-                var argList = args.ToList();
-                if (argList.Contains("build"))
-                {
-                    return (true, string.Empty, string.Empty);
-                }
-
-                if (argList.Contains("msbuild"))
-                {
-                    var project = argList.FirstOrDefault(arg =>
-                        arg.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
-                    if (project == null)
-                    {
-                        return (false, string.Empty, "Project path missing");
-                    }
-
-                    var fullProject = Path.GetFullPath(project);
-                    var outputType = fullProject.Equals(appFullPath, StringComparison.OrdinalIgnoreCase)
-                        ? "Exe"
-                        : "Library";
-                    var targetPath = fullProject.Equals(appFullPath, StringComparison.OrdinalIgnoreCase)
-                        ? appTargetPath
-                        : libTargetPath;
-                    var output = BuildMsbuildOutput(
-                        "TargetFramework=net8.0",
-                        "TargetFrameworks=",
-                        $"OutputType={outputType}",
-                        $"TargetPath={targetPath}");
-                    return (true, output, string.Empty);
-                }
-
-                return (false, string.Empty, "Unexpected command");
-            }
-
-            var resolver = new ProjectResolver(RunProcess);
-            var resolved = resolver.Resolve(new[] { solutionPath }, null);
-
-            Assert.NotNull(resolved);
-            Assert.Equal(new[] { "dotnet", appTargetPath }, resolved!.Command);
-            Assert.Equal("App", resolved.Label);
+            assert(new SolutionProjectsFixture(
+                root,
+                solutionPath,
+                appProjectPath,
+                libProjectPath,
+                Path.Combine(root, "src", "App", "bin", "Release", "net8.0", "App.dll"),
+                Path.Combine(root, "src", "Lib", "bin", "Release", "net8.0", "Lib.dll")));
         }
         finally
         {
@@ -241,16 +152,45 @@ public sealed class ProjectResolverTests
         }
     }
 
-    private static string BuildMsbuildOutput(params string[] lines)
+    private static ProjectResolver CreateSolutionResolver(SolutionProjectsFixture projects)
     {
-        return string.Join(Environment.NewLine, lines);
+        var appFullPath = Path.GetFullPath(projects.AppProjectPath);
+        return new ProjectResolver((_, args, _, _) =>
+        {
+            var argList = args.ToList();
+            if (argList.Contains("build"))
+            {
+                return (true, string.Empty, string.Empty);
+            }
+
+            if (argList.Contains("msbuild"))
+            {
+                var projectPath = argList.FirstOrDefault(arg =>
+                    arg.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase));
+                if (projectPath == null)
+                {
+                    return (false, string.Empty, "Project path missing");
+                }
+
+                var fullProjectPath = Path.GetFullPath(projectPath);
+                var isExecutable = fullProjectPath.Equals(appFullPath, StringComparison.OrdinalIgnoreCase);
+                var output = BuildMsbuildOutput(
+                    "TargetFramework=net8.0",
+                    "TargetFrameworks=",
+                    isExecutable ? "OutputType=Exe" : "OutputType=Library",
+                    $"TargetPath={(isExecutable ? projects.AppTargetPath : projects.LibTargetPath)}");
+                return (true, output, string.Empty);
+            }
+
+            return (false, string.Empty, "Unexpected command");
+        });
     }
 
-    private static string CreateTempDirectory()
+    private static string? GetRequestedTargetFramework(IEnumerable<string> args)
     {
-        var path = Path.Combine(Path.GetTempPath(), "AsynkronProfilerTests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
+        return args
+            .FirstOrDefault(arg => arg.StartsWith("-property:TargetFramework=", StringComparison.OrdinalIgnoreCase))
+            ?.Split('=', 2)[1];
     }
 
     private static void SafeDeleteDirectory(string path)
@@ -267,4 +207,20 @@ public sealed class ProjectResolverTests
             // Ignore cleanup failures.
         }
     }
+
+    private sealed record TestProject(string Root, string ProjectDirectory, string ProjectPath)
+    {
+        public string GetTargetPath(string targetFramework)
+        {
+            return Path.Combine(ProjectDirectory, "bin", "Release", targetFramework, "App.dll");
+        }
+    }
+
+    private sealed record SolutionProjectsFixture(
+        string Root,
+        string SolutionPath,
+        string AppProjectPath,
+        string LibProjectPath,
+        string AppTargetPath,
+        string LibTargetPath);
 }
