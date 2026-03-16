@@ -31,7 +31,7 @@ public sealed class ProfileInputLoaderTests
             .ToArray();
         var callTree = new AllocationCallTreeResult(roots.Sum(root => root.TotalBytes), roots.Sum(root => root.Count), roots);
 
-        var result = loader.BuildMemoryProfileResult(callTree);
+        var result = ProfileInputLoader.BuildMemoryProfileResult(callTree);
 
         Assert.Equal("1.50 KB", result.TotalAllocated);
         Assert.Equal("1.50 KB", result.AllocationTotal);
