@@ -654,11 +654,7 @@ public sealed class ProfilerTraceAnalyzer
             source.Dynamic.AddCallbackForProviderEvent(
                 "Microsoft-Windows-DotNETRuntime",
                 "ContentionStop_V2",
-                data =>
-                {
-                    var durationMs = TraceEventPayloadReader.TryGetPayloadDurationMs(data);
-                    HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
-                });
+                HandleDynamicContentionStop);
 
             void RegisterFallbackContentionEvent(string eventName, Action<TraceEvent> handler)
             {
@@ -681,11 +677,7 @@ public sealed class ProfilerTraceAnalyzer
                 data => HandleStart(data.ThreadID, data.TimeStampRelativeMSec, data.CallStack()));
             RegisterFallbackContentionEvent(
                 "ContentionStop",
-                data =>
-                {
-                    var durationMs = TraceEventPayloadReader.TryGetPayloadDurationMs(data);
-                    HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
-                });
+                HandleDynamicContentionStop);
 
             source.Process();
 
@@ -695,6 +687,12 @@ public sealed class ProfilerTraceAnalyzer
             var topFunctions = FunctionSampleBuilder.CreateSorted(frameTotals, frameCounts, frameIndices);
 
             return new ContentionProfileResult(topFunctions, callTreeRoot, totalWaitMs, totalCount);
+
+            void HandleDynamicContentionStop(TraceEvent data)
+            {
+                var durationMs = TraceEventPayloadReader.TryGetPayloadDurationMs(data);
+                HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
+            }
         }
         catch (Exception ex)
         {

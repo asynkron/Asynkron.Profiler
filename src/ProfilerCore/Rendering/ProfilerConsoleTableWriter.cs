@@ -37,20 +37,15 @@ internal sealed class ProfilerConsoleTableWriter
         return table;
     }
 
-    public static void WriteTable(
-        IReadOnlyList<TableColumnSpec> columns,
-        IEnumerable<IReadOnlyList<string>> rows,
-        string? title = null,
-        bool hideHeaders = false,
-        string? headerColor = null)
+    public static void WriteTable(Table table)
     {
-        AnsiConsole.Write(BuildTableWithRows(columns, rows, title, hideHeaders, headerColor));
+        AnsiConsole.Write(table);
     }
 
     public static void WriteSummaryTable(IEnumerable<IReadOnlyList<string>> rows)
     {
         ConsoleThemeHelpers.PrintSection("Summary");
-        WriteTable(SummaryColumns, rows, hideHeaders: true);
+        WriteTable(BuildTableWithRows(SummaryColumns, rows, hideHeaders: true));
     }
 
     public static Rows BuildTableBlock(Table table, string title, string color)

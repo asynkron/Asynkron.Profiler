@@ -52,16 +52,13 @@ public sealed class CallTreeNode
 
     public void AddAllocationTotals(long bytes)
     {
-        if (bytes <= 0)
+        if (!TryAddPositive(AllocationBytes, bytes, out var allocationBytes))
         {
             return;
         }
 
-        AllocationBytes += bytes;
-        if (AllocationCount < int.MaxValue)
-        {
-            AllocationCount += 1;
-        }
+        AllocationBytes = allocationBytes;
+        AllocationCount = IncrementBounded(AllocationCount);
     }
 
     public void AddAllocation(string typeName, long bytes)
@@ -91,20 +88,15 @@ public sealed class CallTreeNode
 
     public void AddExceptionTotals(long count)
     {
-        if (count <= 0)
+        if (TryAddPositive(ExceptionCount, count, out var exceptionCount))
         {
-            return;
+            ExceptionCount = exceptionCount;
         }
-
-        ExceptionCount += count;
     }
 
     public void IncrementCalls()
     {
-        if (Calls < int.MaxValue)
-        {
-            Calls += 1;
-        }
+        Calls = IncrementBounded(Calls);
     }
 
     public void AddException(string typeName, long count)
@@ -120,5 +112,27 @@ public sealed class CallTreeNode
         ExceptionByType[typeName] = ExceptionByType.TryGetValue(typeName, out var existing)
             ? existing + count
             : count;
+    }
+
+    private static bool TryAddPositive(long total, long value, out long updatedTotal)
+    {
+        if (value <= 0)
+        {
+            updatedTotal = total;
+            return false;
+        }
+
+        updatedTotal = total + value;
+        return true;
+    }
+
+    private static int IncrementBounded(int value)
+    {
+        if (value < int.MaxValue)
+        {
+            return value + 1;
+        }
+
+        return value;
     }
 }

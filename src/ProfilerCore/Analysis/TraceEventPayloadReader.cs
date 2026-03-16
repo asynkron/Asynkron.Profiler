@@ -54,17 +54,9 @@ internal static class TraceEventPayloadReader
     {
         foreach (var name in names)
         {
-            try
+            if (TryGetPayloadValue(data, name, out var value))
             {
-                var value = data.PayloadByName(name);
-                if (value != null)
-                {
-                    return value.ToString();
-                }
-            }
-            catch
-            {
-                // Ignore missing payloads.
+                return value!.ToString();
             }
         }
 
@@ -73,30 +65,36 @@ internal static class TraceEventPayloadReader
 
     private static long? TryGetPayloadLong(TraceEvent data, string name)
     {
+        if (!TryGetPayloadValue(data, name, out var value))
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            byte v => v,
+            sbyte v => v,
+            short v => v,
+            ushort v => v,
+            int v => v,
+            uint v => v,
+            long v => v,
+            ulong v => v <= long.MaxValue ? (long)v : null,
+            _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
+        };
+    }
+
+    private static bool TryGetPayloadValue(TraceEvent data, string name, out object? value)
+    {
         try
         {
-            var value = data.PayloadByName(name);
-            if (value == null)
-            {
-                return null;
-            }
-
-            return value switch
-            {
-                byte v => v,
-                sbyte v => v,
-                short v => v,
-                ushort v => v,
-                int v => v,
-                uint v => v,
-                long v => v,
-                ulong v => v <= long.MaxValue ? (long)v : null,
-                _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
-            };
+            value = data.PayloadByName(name);
+            return value != null;
         }
         catch
         {
-            return null;
+            value = null;
+            return false;
         }
     }
 }

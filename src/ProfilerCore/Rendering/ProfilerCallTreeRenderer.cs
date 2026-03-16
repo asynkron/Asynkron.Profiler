@@ -50,25 +50,22 @@ internal sealed class ProfilerCallTreeRenderer
         var totalTime = results.CallTreeTotal;
         var totalSamples = callTreeRoot.Calls;
         var traversal = CallTreeTraversalSettings.Create(maxDepth, maxWidth, siblingCutoffPercent);
-        var rootSelection = _rootResolver.Resolve(
+        var (rootSelection, context) = CreateRenderState(
             callTreeRoot,
             totalTime,
-            useSelfTime ? "Call Tree (Self Time)" : "Call Tree (Total Time)",
-            rootFilter,
-            includeRuntime,
-            rootMode);
-        var context = new ProfilerCallTreeRenderContext(
-            rootSelection.RootTotal,
             totalSamples,
+            useSelfTime ? "Call Tree (Self Time)" : "Call Tree (Total Time)",
             useSelfTime,
             includeRuntime,
             traversal,
+            rootFilter,
+            rootMode,
             timeUnitLabel,
             countSuffix,
             allocationTypeLimit,
             exceptionTypeLimit,
             hotThreshold,
-            HighlightHotspots: true);
+            highlightHotspots: true);
 
         if (showTimeline && rootSelection.RootNode.HasTiming)
         {
@@ -122,25 +119,22 @@ internal sealed class ProfilerCallTreeRenderer
         var totalTime = results.TotalWaitMs;
         var totalSamples = callTreeRoot.Calls;
         var traversal = CallTreeTraversalSettings.Create(maxDepth, maxWidth, siblingCutoffPercent);
-        var rootSelection = _rootResolver.Resolve(
+        var (rootSelection, context) = CreateRenderState(
             callTreeRoot,
             totalTime,
-            "Call Tree (Wait Time)",
-            rootFilter,
-            includeRuntime,
-            rootMode);
-        var context = new ProfilerCallTreeRenderContext(
-            rootSelection.RootTotal,
             totalSamples,
-            false,
+            "Call Tree (Wait Time)",
+            useSelfTime: false,
             includeRuntime,
             traversal,
+            rootFilter,
+            rootMode,
             "ms",
             "x",
             0,
             0,
             DefaultHotThreshold,
-            false);
+            highlightHotspots: false);
 
         return BuildStandardTreeRows(rootSelection.RootNode, rootSelection.Title, context);
     }
@@ -222,12 +216,7 @@ internal sealed class ProfilerCallTreeRenderer
         }
 
         var basePrefix = continuationPrefix ?? prefix;
-        var children = CallTreeVisibility.GetVisibleChildren(
-            node,
-            context.IncludeRuntime,
-            context.UseSelfTime,
-            context.Traversal.MaxWidth,
-            context.Traversal.SiblingCutoffPercent);
+        var children = GetVisibleChildren(node, context);
 
         for (var index = 0; index < children.Count; index++)
         {
@@ -265,12 +254,7 @@ internal sealed class ProfilerCallTreeRenderer
             return;
         }
 
-        var children = CallTreeVisibility.GetVisibleChildren(
-            node,
-            context.IncludeRuntime,
-            context.UseSelfTime,
-            context.Traversal.MaxWidth,
-            context.Traversal.SiblingCutoffPercent);
+        var children = GetVisibleChildren(node, context);
 
         foreach (var child in children)
         {
@@ -307,13 +291,7 @@ internal sealed class ProfilerCallTreeRenderer
         bool useHeatColor = false)
     {
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
-        var isLeaf = isSpecialLeaf || depth >= context.Traversal.MaxDepth ||
-                     !CallTreeVisibility.HasVisibleChildren(
-                         child,
-                         context.IncludeRuntime,
-                         context.UseSelfTime,
-                         context.Traversal.MaxWidth,
-                         context.Traversal.SiblingCutoffPercent);
+        var isLeaf = isSpecialLeaf || depth >= context.Traversal.MaxDepth || !HasVisibleChildren(child, context);
 
         var childNode = parent.AddNode(_formatter.FormatCallTreeLine(
             child,
@@ -345,5 +323,65 @@ internal sealed class ProfilerCallTreeRenderer
         {
             addChildren();
         }
+    }
+
+    private (ProfilerCallTreeRootSelection RootSelection, ProfilerCallTreeRenderContext Context) CreateRenderState(
+        CallTreeNode callTreeRoot,
+        double totalTime,
+        int totalSamples,
+        string title,
+        bool useSelfTime,
+        bool includeRuntime,
+        CallTreeTraversalSettings traversal,
+        string? rootFilter,
+        string? rootMode,
+        string timeUnitLabel,
+        string countSuffix,
+        int allocationTypeLimit,
+        int exceptionTypeLimit,
+        double hotThreshold,
+        bool highlightHotspots)
+    {
+        var rootSelection = _rootResolver.Resolve(
+            callTreeRoot,
+            totalTime,
+            title,
+            rootFilter,
+            includeRuntime,
+            rootMode);
+        var context = new ProfilerCallTreeRenderContext(
+            rootSelection.RootTotal,
+            totalSamples,
+            useSelfTime,
+            includeRuntime,
+            traversal,
+            timeUnitLabel,
+            countSuffix,
+            allocationTypeLimit,
+            exceptionTypeLimit,
+            hotThreshold,
+            highlightHotspots);
+
+        return (rootSelection, context);
+    }
+
+    private static IReadOnlyList<CallTreeNode> GetVisibleChildren(
+        CallTreeNode node,
+        ProfilerCallTreeRenderContext context)
+    {
+        return CallTreeFilters.GetVisibleChildren(
+            node,
+            context.IncludeRuntime,
+            context.UseSelfTime,
+            context.Traversal.MaxWidth,
+            context.Traversal.SiblingCutoffPercent,
+            IsRuntimeNoise);
+    }
+
+    private static bool HasVisibleChildren(
+        CallTreeNode node,
+        ProfilerCallTreeRenderContext context)
+    {
+        return GetVisibleChildren(node, context).Count > 0;
     }
 }

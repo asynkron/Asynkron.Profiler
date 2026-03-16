@@ -217,13 +217,13 @@ public sealed class ProfilerConsoleRenderer
         var hasRows = rows.Count > 0;
         if (hasRows)
         {
-            ProfilerConsoleTableWriter.WriteTable(
+            ProfilerConsoleTableWriter.WriteTable(ProfilerConsoleTableWriter.BuildTableWithRows(
                 new[]
                 {
                     new TableColumnSpec("Metric"),
                     new TableColumnSpec("Value")
                 },
-                rows);
+                rows));
         }
 
         if (!string.IsNullOrWhiteSpace(results.AllocationByTypeRaw))
@@ -318,13 +318,13 @@ public sealed class ProfilerConsoleRenderer
                 });
             }
 
-            ProfilerConsoleTableWriter.WriteTable(
+            ProfilerConsoleTableWriter.WriteTable(ProfilerConsoleTableWriter.BuildTableWithRows(
                 new[]
                 {
                     new TableColumnSpec("Count", RightAligned: true),
                     new TableColumnSpec("Exception")
                 },
-                rows);
+                rows));
         }
 
         var summaryThrown = selectedDetails?.Thrown ?? results.TotalThrown;
@@ -387,13 +387,13 @@ public sealed class ProfilerConsoleRenderer
                     });
                 }
 
-                ProfilerConsoleTableWriter.WriteTable(
+                ProfilerConsoleTableWriter.WriteTable(ProfilerConsoleTableWriter.BuildTableWithRows(
                     new[]
                     {
                         new TableColumnSpec("Count", RightAligned: true),
                         new TableColumnSpec("Function")
                     },
-                    catchRows);
+                    catchRows));
             }
 
             var resolvedRoot = ResolveCallTreeRootFilter(request.CallTreeRoot);
@@ -448,14 +448,14 @@ public sealed class ProfilerConsoleRenderer
             });
         }
 
-        ProfilerConsoleTableWriter.WriteTable(
+        ProfilerConsoleTableWriter.WriteTable(ProfilerConsoleTableWriter.BuildTableWithRows(
             new[]
             {
                 new TableColumnSpec("Wait (ms)", RightAligned: true),
                 new TableColumnSpec("Count", RightAligned: true),
                 new TableColumnSpec("Function")
             },
-            rows);
+            rows));
 
         var filteredOut = results.TopFunctions.Count - filteredList.Count;
         if (filteredOut > 0)
@@ -525,14 +525,14 @@ public sealed class ProfilerConsoleRenderer
                 });
             }
 
-            ProfilerConsoleTableWriter.WriteTable(
+            ProfilerConsoleTableWriter.WriteTable(ProfilerConsoleTableWriter.BuildTableWithRows(
                 new[]
                 {
                     new TableColumnSpec("Size (bytes)", RightAligned: true),
                     new TableColumnSpec("Count", RightAligned: true),
                     new TableColumnSpec("Type")
                 },
-                rows);
+                rows));
         }
         else if (!string.IsNullOrWhiteSpace(results.RawOutput))
         {

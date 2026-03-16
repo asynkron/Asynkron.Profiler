@@ -210,22 +210,7 @@ internal sealed class JitCommandRunner
 
     private ProcessStartInfo CreateProcessStartInfo(string[] command)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = command[0],
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = _outputDirectory
-        };
-
-        for (var i = 1; i < command.Length; i++)
-        {
-            psi.ArgumentList.Add(command[i]);
-        }
-
-        return psi;
+        return CommandProcessStartInfoFactory.Create(command, _outputDirectory);
     }
 
     private static void AppendIfNotEmpty(List<string> results, string path)
