@@ -89,10 +89,10 @@ public sealed class ProfilerTraceAnalyzer
                     return;
                 }
 
-                var typeName = GetExceptionTypeName(data);
+                var typeName = TraceEventPayloadReader.GetExceptionTypeName(data);
                 callTreeRoot.AddExceptionTotals(1);
                 VisitCallTreeFrames(
-                    EnumerateCpuFrames(stack),
+                    TraceCallStackFrameEnumerator.EnumerateCpuFrames(stack),
                     callTreeRoot,
                     frameIndices,
                     framesList,
@@ -125,7 +125,7 @@ public sealed class ProfilerTraceAnalyzer
                 var typeName = string.IsNullOrWhiteSpace(data.TypeName) ? "Unknown" : data.TypeName;
                 callTreeRoot.AddAllocationTotals(bytes);
                 VisitCallTreeFrames(
-                    EnumerateCpuFrames(stack),
+                    TraceCallStackFrameEnumerator.EnumerateCpuFrames(stack),
                     callTreeRoot,
                     frameIndices,
                     framesList,
@@ -199,7 +199,7 @@ public sealed class ProfilerTraceAnalyzer
                 callTreeTotal += weight;
 
                 var node = VisitCallTreeFrames(
-                    EnumerateCpuFrames(stack),
+                    TraceCallStackFrameEnumerator.EnumerateCpuFrames(stack),
                     callTreeRoot,
                     frameIndices,
                     framesList,
@@ -238,15 +238,7 @@ public sealed class ProfilerTraceAnalyzer
             callTreeRoot.Total = callTreeTotal;
             callTreeRoot.Calls = totalSamples > int.MaxValue ? int.MaxValue : (int)totalSamples;
 
-            var allFunctions = frameTotals
-                .OrderByDescending(kv => kv.Value)
-                .Select(kv =>
-                {
-                    frameCounts.TryGetValue(kv.Key, out var calls);
-                    frameIndices.TryGetValue(kv.Key, out var frameIdx);
-                    return new FunctionSample(kv.Key, kv.Value, calls, frameIdx);
-                })
-                .ToList();
+            var allFunctions = FunctionSampleBuilder.CreateSorted(frameTotals, frameCounts, frameIndices);
 
             var totalTime = frameTotals.Values.Sum();
 
@@ -313,7 +305,7 @@ public sealed class ProfilerTraceAnalyzer
                 }
 
                 var node = typeRoot;
-                foreach (var frame in EnumerateAllocationFrames(stack))
+                foreach (var frame in TraceCallStackFrameEnumerator.EnumerateAllocationFrames(stack))
                 {
                     if (string.IsNullOrWhiteSpace(frame))
                     {
@@ -381,7 +373,7 @@ public sealed class ProfilerTraceAnalyzer
 
             void RecordThrow(TraceEvent data)
             {
-                var typeName = GetExceptionTypeName(data);
+                var typeName = TraceEventPayloadReader.GetExceptionTypeName(data);
                 exceptionCounts[typeName] = exceptionCounts.TryGetValue(typeName, out var count)
                     ? count + 1
                     : 1;
@@ -417,7 +409,7 @@ public sealed class ProfilerTraceAnalyzer
                     catchFrameIndices,
                     catchFramesList);
 
-                var typeName = GetExceptionTypeName(data);
+                var typeName = TraceEventPayloadReader.GetExceptionTypeName(data);
                 typeCatchCounts[typeName] = typeCatchCounts.TryGetValue(typeName, out var typeCount)
                     ? typeCount + 1
                     : 1;
@@ -433,7 +425,7 @@ public sealed class ProfilerTraceAnalyzer
                     catchFrameIndices,
                     catchFramesList);
 
-                var catchSite = GetTopFrameName(data.CallStack()) ?? "Unknown";
+                var catchSite = TraceCallStackFrameEnumerator.GetTopFrameName(data.CallStack()) ?? "Unknown";
                 catchSites[catchSite] = catchSites.TryGetValue(catchSite, out var count)
                     ? count + 1
                     : 1;
@@ -522,11 +514,7 @@ public sealed class ProfilerTraceAnalyzer
                 typeThrowRoots.TryGetValue(typeName, out var throwRootNode);
                 typeCatchRoots.TryGetValue(typeName, out var catchRootNode);
                 typeCatchSites.TryGetValue(typeName, out var sites);
-                var siteList = (IReadOnlyList<ExceptionSiteSample>)(sites == null
-                    ? Array.Empty<ExceptionSiteSample>()
-                    : sites.OrderByDescending(kv => kv.Value)
-                        .Select(kv => new ExceptionSiteSample(kv.Key, kv.Value))
-                        .ToList());
+                var siteList = ExceptionSiteSampleBuilder.Create(sites);
 
                 if (throwRootNode != null)
                 {
@@ -548,11 +536,7 @@ public sealed class ProfilerTraceAnalyzer
 
                 typeCatchRoots.TryGetValue(typeName, out var catchRootNode);
                 typeCatchSites.TryGetValue(typeName, out var sites);
-                var siteList = (IReadOnlyList<ExceptionSiteSample>)(sites == null
-                    ? Array.Empty<ExceptionSiteSample>()
-                    : sites.OrderByDescending(kv => kv.Value)
-                        .Select(kv => new ExceptionSiteSample(kv.Key, kv.Value))
-                        .ToList());
+                var siteList = ExceptionSiteSampleBuilder.Create(sites);
 
                 typeDetails[typeName] = new ExceptionTypeDetails(
                     0,
@@ -567,10 +551,7 @@ public sealed class ProfilerTraceAnalyzer
                 .Select(kv => new ExceptionTypeSample(kv.Key, kv.Value))
                 .ToList();
 
-            var catchSiteList = catchSites
-                .OrderByDescending(kv => kv.Value)
-                .Select(kv => new ExceptionSiteSample(kv.Key, kv.Value))
-                .ToList();
+            var catchSiteList = ExceptionSiteSampleBuilder.Create(catchSites);
 
             return new ExceptionProfileResult(
                 exceptionTypes,
@@ -645,7 +626,7 @@ public sealed class ProfilerTraceAnalyzer
                 }
 
                 VisitCallTreeFrames(
-                    EnumerateContentionFrames(stack),
+                    TraceCallStackFrameEnumerator.EnumerateContentionFrames(stack),
                     callTreeRoot,
                     frameIndices,
                     framesList,
@@ -697,7 +678,7 @@ public sealed class ProfilerTraceAnalyzer
                 "ContentionStop_V2",
                 data =>
                 {
-                    var durationMs = TryGetPayloadDurationMs(data);
+                    var durationMs = TraceEventPayloadReader.TryGetPayloadDurationMs(data);
                     HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
                 });
 
@@ -724,7 +705,7 @@ public sealed class ProfilerTraceAnalyzer
                         return;
                     }
 
-                    var durationMs = TryGetPayloadDurationMs(data);
+                    var durationMs = TraceEventPayloadReader.TryGetPayloadDurationMs(data);
                     HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
                 });
 
@@ -733,15 +714,7 @@ public sealed class ProfilerTraceAnalyzer
             callTreeRoot.Total = totalWaitMs;
             callTreeRoot.Calls = totalCount > int.MaxValue ? int.MaxValue : (int)totalCount;
 
-            var topFunctions = frameTotals
-                .OrderByDescending(kv => kv.Value)
-                .Select(kv =>
-                {
-                    frameCounts.TryGetValue(kv.Key, out var calls);
-                    frameIndices.TryGetValue(kv.Key, out var frameIdx);
-                    return new FunctionSample(kv.Key, kv.Value, calls, frameIdx);
-                })
-                .ToList();
+            var topFunctions = FunctionSampleBuilder.CreateSorted(frameTotals, frameCounts, frameIndices);
 
             return new ContentionProfileResult(topFunctions, callTreeRoot, totalWaitMs, totalCount);
         }
@@ -771,7 +744,7 @@ public sealed class ProfilerTraceAnalyzer
         List<string> framesList)
     {
         VisitCallTreeFrames(
-            EnumerateExceptionFrames(stack),
+            TraceCallStackFrameEnumerator.EnumerateExceptionFrames(stack),
             root,
             frameIndices,
             framesList,
@@ -839,165 +812,4 @@ public sealed class ProfilerTraceAnalyzer
         return child;
     }
 
-    private static string? GetFrameMethodName(TraceCallStack? stack)
-    {
-        var methodName = stack?.CodeAddress?.FullMethodName;
-        if (string.IsNullOrWhiteSpace(methodName))
-        {
-            methodName = stack?.CodeAddress?.Method?.FullMethodName;
-        }
-
-        return string.IsNullOrWhiteSpace(methodName) ? null : methodName;
-    }
-
-    private static IEnumerable<string> EnumerateResolvedFrameNames(TraceCallStack? stack)
-    {
-        for (var current = stack; current != null; current = current.Caller)
-        {
-            var methodName = GetFrameMethodName(current);
-            if (methodName != null)
-            {
-                yield return methodName;
-            }
-        }
-    }
-
-    private static IEnumerable<string> EnumerateExceptionFrames(TraceCallStack? stack)
-    {
-        return EnumerateResolvedFrameNames(stack);
-    }
-
-    private static IEnumerable<string> EnumerateCpuFrames(TraceCallStack? stack)
-    {
-        var lastWasUnknown = false;
-        for (var current = stack; current != null; current = current.Caller)
-        {
-            var methodName = GetFrameMethodName(current);
-            if (methodName == null)
-            {
-                if (!lastWasUnknown)
-                {
-                    yield return "Unmanaged Code";
-                    lastWasUnknown = true;
-                }
-
-                continue;
-            }
-
-            lastWasUnknown = false;
-            yield return methodName;
-        }
-    }
-
-    private static IEnumerable<string> EnumerateAllocationFrames(TraceCallStack stack)
-    {
-        for (var current = stack; current != null; current = current.Caller)
-        {
-            yield return GetFrameMethodName(current) ?? "Unknown";
-        }
-    }
-
-    private static IEnumerable<string> EnumerateContentionFrames(TraceCallStack? stack)
-    {
-        return EnumerateResolvedFrameNames(stack);
-    }
-
-    private static string? GetTopFrameName(TraceCallStack? stack)
-    {
-        return GetFrameMethodName(stack);
-    }
-
-    private static string GetExceptionTypeName(TraceEvent data)
-    {
-        var typeName = TryGetPayloadString(data, "ExceptionTypeName", "ExceptionType", "TypeName");
-        if (string.IsNullOrWhiteSpace(typeName))
-        {
-            try
-            {
-                foreach (var payloadName in data.PayloadNames ?? Array.Empty<string>())
-                {
-                    if (!payloadName.Contains("ExceptionType", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    var value = data.PayloadByName(payloadName);
-                    if (value != null)
-                    {
-                        typeName = value.ToString();
-                        break;
-                    }
-                }
-            }
-            catch
-            {
-                typeName = null;
-            }
-        }
-
-        return string.IsNullOrWhiteSpace(typeName) ? "Unknown" : typeName;
-    }
-
-    private static double TryGetPayloadDurationMs(TraceEvent data)
-    {
-        var durationNs = TryGetPayloadLong(data, "DurationNs")
-                         ?? TryGetPayloadLong(data, "DurationNS")
-                         ?? TryGetPayloadLong(data, "Duration");
-        if (durationNs is > 0)
-        {
-            return durationNs.Value / 1_000_000d;
-        }
-
-        return 0d;
-    }
-
-    private static string? TryGetPayloadString(TraceEvent data, params string[] names)
-    {
-        foreach (var name in names)
-        {
-            try
-            {
-                var value = data.PayloadByName(name);
-                if (value != null)
-                {
-                    return value.ToString();
-                }
-            }
-            catch
-            {
-                // Ignore missing payloads.
-            }
-        }
-
-        return null;
-    }
-
-    private static long? TryGetPayloadLong(TraceEvent data, string name)
-    {
-        try
-        {
-            var value = data.PayloadByName(name);
-            if (value == null)
-            {
-                return null;
-            }
-
-            return value switch
-            {
-                byte v => v,
-                sbyte v => v,
-                short v => v,
-                ushort v => v,
-                int v => v,
-                uint v => v,
-                long v => v,
-                ulong v => v <= long.MaxValue ? (long)v : null,
-                _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
-            };
-        }
-        catch
-        {
-            return null;
-        }
-    }
 }

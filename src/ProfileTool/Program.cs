@@ -35,25 +35,6 @@ bool TryApplyTheme(string? themeName)
     return true;
 }
 
-void AttachProcessDataHandlers(Process process, Action<string> onStdout, Action<string> onStderr)
-{
-    process.OutputDataReceived += (_, e) =>
-    {
-        if (e.Data != null)
-        {
-            onStdout(e.Data);
-        }
-    };
-
-    process.ErrorDataReceived += (_, e) =>
-    {
-        if (e.Data != null)
-        {
-            onStderr(e.Data);
-        }
-    };
-}
-
 
 IReadOnlyList<string> GetUsageExampleLines()
 {
@@ -135,86 +116,6 @@ int GetHelpWidth()
     }
 }
 
-(bool Success, string StdOut, string StdErr) RunProcess(
-    string fileName,
-    IEnumerable<string> args,
-    string? workingDir = null,
-    int timeoutMs = 300000)
-{
-    try
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        foreach (var arg in args)
-        {
-            psi.ArgumentList.Add(arg);
-        }
-
-        if (!string.IsNullOrWhiteSpace(workingDir))
-        {
-            psi.WorkingDirectory = workingDir;
-        }
-
-        using var process = new Process { StartInfo = psi };
-        if (!process.Start())
-        {
-            return (false, string.Empty, "Failed to start process.");
-        }
-
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        var stdoutLock = new object();
-        var stderrLock = new object();
-
-        AttachProcessDataHandlers(
-            process,
-            data =>
-            {
-                lock (stdoutLock)
-                {
-                    stdout.AppendLine(data);
-                }
-            },
-            data =>
-            {
-                lock (stderrLock)
-                {
-                    stderr.AppendLine(data);
-                }
-            });
-
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        if (!process.WaitForExit(timeoutMs))
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Ignore kill failures.
-            }
-
-            return (false, stdout.ToString(), $"Process timed out after {timeoutMs} ms.");
-        }
-
-        process.WaitForExit();
-        return (process.ExitCode == 0, stdout.ToString(), stderr.ToString());
-    }
-    catch (Exception ex)
-    {
-        return (false, string.Empty, ex.Message);
-    }
-}
 
 var outputDir = Path.Combine(Environment.CurrentDirectory, "profile-output");
 Directory.CreateDirectory(outputDir);
@@ -242,7 +143,7 @@ bool EnsureToolAvailable(string toolName, string installHint)
         return cached;
     }
 
-    var (success, _, stderr) = RunProcess(toolName, versionProbeArgs, timeoutMs: 10000);
+    var (success, _, stderr) = ProcessRunner.Run(toolName, versionProbeArgs, timeoutMs: 10000);
     if (!success)
     {
         var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
@@ -293,7 +194,7 @@ TResult? CollectTraceAndAnalyze<TResult>(
             collectArgs.Add("--");
             collectArgs.AddRange(command);
 
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+            var (success, _, stderr) = ProcessRunner.Run("dotnet-trace", collectArgs, timeoutMs: 180000);
             if (!success || !File.Exists(traceFile))
             {
                 AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{failureLabel}:[/] {Markup.Escape(stderr)}");
@@ -355,7 +256,7 @@ string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool
             collectArgs.Add(traceFile);
             collectArgs.Add("--");
             collectArgs.AddRange(command);
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+            var (success, _, stderr) = ProcessRunner.Run("dotnet-trace", collectArgs, timeoutMs: 180000);
 
             if (!success || !File.Exists(traceFile))
             {
@@ -392,7 +293,7 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
                 "--"
             };
             collectArgs.AddRange(command);
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+            var (success, _, stderr) = ProcessRunner.Run("dotnet-trace", collectArgs, timeoutMs: 180000);
 
             if (!success || !File.Exists(traceFile))
             {
@@ -793,7 +694,7 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
 
     Thread.Sleep(500);
 
-    var (success, _, stderr) = RunProcess(
+    var (success, _, stderr) = ProcessRunner.Run(
         "dotnet-gcdump",
         new[]
         {
@@ -813,18 +714,12 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
         return null;
     }
 
-    var (reportSuccess, reportOut, reportErr) = RunProcess(
-        "dotnet-gcdump",
-        new[] { "report", gcdumpFile },
-        timeoutMs: 60000);
-
-    if (reportSuccess)
-    {
-        return ParseGcdumpReport(reportOut);
-    }
-
-    AnsiConsole.MarkupLine($"[{theme.AccentColor}]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
-    return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
+    return GcdumpReportLoader.Load(
+        gcdumpFile,
+        theme,
+        ProcessRunner.Run,
+        ParseGcdumpReport,
+        AnsiConsole.MarkupLine);
 }
 
 string[] JitInlineDumpCommand(
@@ -899,7 +794,7 @@ string[] JitInlineDumpCommand(
     stdoutWriter.AutoFlush = true;
     stderrWriter.AutoFlush = true;
 
-    AttachProcessDataHandlers(proc, stdoutWriter.WriteLine, stderrWriter.WriteLine);
+    ProcessRunner.AttachDataHandlers(proc, stdoutWriter.WriteLine, stderrWriter.WriteLine);
 
     proc.BeginOutputReadLine();
     proc.BeginErrorReadLine();
@@ -990,7 +885,7 @@ string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir, 
     stderrWriter.AutoFlush = true;
     colorWriter.AutoFlush = true;
 
-    AttachProcessDataHandlers(
+    ProcessRunner.AttachDataHandlers(
         proc,
         data =>
         {
@@ -1468,18 +1363,12 @@ HeapProfileResult? HeapProfileFromInput(string inputPath)
             return null;
         }
 
-        var (reportSuccess, reportOut, reportErr) = RunProcess(
-            "dotnet-gcdump",
-            new[] { "report", inputPath },
-            timeoutMs: 60000);
-
-        if (reportSuccess)
-        {
-            return ParseGcdumpReport(reportOut);
-        }
-
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
-        return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
+        return GcdumpReportLoader.Load(
+            inputPath,
+            theme,
+            ProcessRunner.Run,
+            ParseGcdumpReport,
+            AnsiConsole.MarkupLine);
     }
 
     if (extension == ".txt" || extension == ".log")
@@ -1722,7 +1611,7 @@ rootCommand.SetHandler(context =>
     }
 
 
-    var resolver = new ProjectResolver(RunProcess);
+    var resolver = new ProjectResolver(ProcessRunner.Run);
     string label;
     string description;
     if (hasInput)
