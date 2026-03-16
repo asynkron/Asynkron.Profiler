@@ -210,10 +210,7 @@ public sealed class ProfilerTraceAnalyzer
                             child.Total += weight;
                         }
 
-                        if (child.Calls < int.MaxValue)
-                        {
-                            child.Calls += 1;
-                        }
+                        child.IncrementCalls();
 
                         frameCounts.TryGetValue(frame, out var count);
                         frameCounts[frame] = count + 1;
@@ -387,11 +384,7 @@ public sealed class ProfilerTraceAnalyzer
                 typeThrowCounts[typeName] = typeThrowCounts.TryGetValue(typeName, out var typeCount)
                     ? typeCount + 1
                     : 1;
-                if (!typeThrowRoots.TryGetValue(typeName, out var typeRoot))
-                {
-                    typeRoot = new CallTreeNode(-1, "Total");
-                    typeThrowRoots[typeName] = typeRoot;
-                }
+                var typeRoot = GetOrCreateTypeRoot(typeThrowRoots, typeName);
 
                 RecordExceptionStack(
                     data.CallStack(),
@@ -413,11 +406,7 @@ public sealed class ProfilerTraceAnalyzer
                 typeCatchCounts[typeName] = typeCatchCounts.TryGetValue(typeName, out var typeCount)
                     ? typeCount + 1
                     : 1;
-                if (!typeCatchRoots.TryGetValue(typeName, out var typeRoot))
-                {
-                    typeRoot = new CallTreeNode(-1, "Total");
-                    typeCatchRoots[typeName] = typeRoot;
-                }
+                var typeRoot = GetOrCreateTypeRoot(typeCatchRoots, typeName);
 
                 RecordExceptionStack(
                     data.CallStack(),
@@ -486,11 +475,7 @@ public sealed class ProfilerTraceAnalyzer
 
             foreach (var (typeName, count) in typeThrowCounts)
             {
-                if (!typeThrowRoots.TryGetValue(typeName, out var typeRoot))
-                {
-                    typeRoot = new CallTreeNode(-1, "Total");
-                    typeThrowRoots[typeName] = typeRoot;
-                }
+                var typeRoot = GetOrCreateTypeRoot(typeThrowRoots, typeName);
 
                 typeRoot.Total = count;
                 typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
@@ -498,11 +483,7 @@ public sealed class ProfilerTraceAnalyzer
 
             foreach (var (typeName, count) in typeCatchCounts)
             {
-                if (!typeCatchRoots.TryGetValue(typeName, out var typeRoot))
-                {
-                    typeRoot = new CallTreeNode(-1, "Total");
-                    typeCatchRoots[typeName] = typeRoot;
-                }
+                var typeRoot = GetOrCreateTypeRoot(typeCatchRoots, typeName);
 
                 typeRoot.Total = count;
                 typeRoot.Calls = count > int.MaxValue ? int.MaxValue : (int)count;
@@ -633,10 +614,7 @@ public sealed class ProfilerTraceAnalyzer
                     (child, frame, _) =>
                     {
                         child.Total += durationMs;
-                        if (child.Calls < int.MaxValue)
-                        {
-                            child.Calls += 1;
-                        }
+                        child.IncrementCalls();
 
                         frameTotals[frame] = frameTotals.TryGetValue(frame, out var total)
                             ? total + durationMs
@@ -682,29 +660,29 @@ public sealed class ProfilerTraceAnalyzer
                     HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
                 });
 
-            source.Dynamic.AddCallbackForProviderEvent(
-                "Microsoft-Windows-DotNETRuntime",
-                "ContentionStart",
-                data =>
-                {
-                    if (sawTypedEvent)
+            void RegisterFallbackContentionEvent(string eventName, Action<TraceEvent> handler)
+            {
+                source.Dynamic.AddCallbackForProviderEvent(
+                    "Microsoft-Windows-DotNETRuntime",
+                    eventName,
+                    data =>
                     {
-                        return;
-                    }
+                        if (sawTypedEvent)
+                        {
+                            return;
+                        }
 
-                    HandleStart(data.ThreadID, data.TimeStampRelativeMSec, data.CallStack());
-                });
+                        handler(data);
+                    });
+            }
 
-            source.Dynamic.AddCallbackForProviderEvent(
-                "Microsoft-Windows-DotNETRuntime",
+            RegisterFallbackContentionEvent(
+                "ContentionStart",
+                data => HandleStart(data.ThreadID, data.TimeStampRelativeMSec, data.CallStack()));
+            RegisterFallbackContentionEvent(
                 "ContentionStop",
                 data =>
                 {
-                    if (sawTypedEvent)
-                    {
-                        return;
-                    }
-
                     var durationMs = TraceEventPayloadReader.TryGetPayloadDurationMs(data);
                     HandleStop(data.ThreadID, data.TimeStampRelativeMSec, durationMs, data.CallStack());
                 });
@@ -751,10 +729,7 @@ public sealed class ProfilerTraceAnalyzer
             static (child, _, _) =>
             {
                 child.Total += 1;
-                if (child.Calls < int.MaxValue)
-                {
-                    child.Calls += 1;
-                }
+                child.IncrementCalls();
             });
     }
 
@@ -812,4 +787,16 @@ public sealed class ProfilerTraceAnalyzer
         return child;
     }
 
+    private static CallTreeNode GetOrCreateTypeRoot(
+        Dictionary<string, CallTreeNode> typeRoots,
+        string typeName)
+    {
+        if (!typeRoots.TryGetValue(typeName, out var typeRoot))
+        {
+            typeRoot = new CallTreeNode(-1, "Total");
+            typeRoots[typeName] = typeRoot;
+        }
+
+        return typeRoot;
+    }
 }
