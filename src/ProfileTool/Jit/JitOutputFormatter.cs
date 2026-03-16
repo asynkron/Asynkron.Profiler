@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Linq;
 using System.Text.RegularExpressions;
 using Spectre.Console;
 
@@ -69,183 +68,60 @@ internal sealed partial class JitOutputFormatter
 
     public void PrintDisasmSummary(string logPath)
     {
-        if (!File.Exists(logPath))
+        var summary = JitDumpSummaryReader.ReadDisasmSummary(logPath);
+        if (summary == null)
         {
             return;
         }
 
-        string? methodLine = null;
-        string? methodName = null;
-        string? tier = null;
-        string? emitting = null;
-        string? pgoLine = null;
-        int? inlinePgo = null;
-        int? inlineSingleBlock = null;
-        int? inlineNoPgo = null;
-        int? blockCount = null;
-        int? instructionCount = null;
-        int? codeSize = null;
-
-        var inMethod = false;
-        var blocks = 0;
-        var instructions = 0;
-
-        foreach (var line in File.ReadLines(logPath))
-        {
-            if (line.StartsWith("; Assembly listing for method ", StringComparison.Ordinal))
-            {
-                if (methodLine == null)
-                {
-                    methodLine = line.Substring("; Assembly listing for method ".Length).Trim();
-                    var tierStart = methodLine.LastIndexOf(" (", StringComparison.Ordinal);
-                    if (tierStart > 0 && methodLine.EndsWith(')'))
-                    {
-                        tier = methodLine[(tierStart + 2)..^1];
-                        methodName = methodLine[..tierStart];
-                    }
-                    else
-                    {
-                        methodName = methodLine;
-                    }
-
-                    inMethod = true;
-                    continue;
-                }
-
-                if (inMethod)
-                {
-                    break;
-                }
-            }
-
-            if (line.StartsWith("; Emitting ", StringComparison.Ordinal))
-            {
-                emitting = line[2..].Trim();
-                continue;
-            }
-
-            if (line.StartsWith("; No PGO data", StringComparison.Ordinal) ||
-                line.Contains("inlinees", StringComparison.Ordinal))
-            {
-                pgoLine ??= line.TrimStart(' ', ';').Trim();
-                if (line.Contains("inlinees", StringComparison.Ordinal))
-                {
-                    var parts = line.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                    foreach (var part in parts)
-                    {
-                        if (!int.TryParse(part.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(), out var value))
-                        {
-                            continue;
-                        }
-
-                        if (part.Contains("inlinees with PGO data", StringComparison.Ordinal))
-                        {
-                            inlinePgo = value;
-                        }
-                        else if (part.Contains("single block inlinees", StringComparison.Ordinal))
-                        {
-                            inlineSingleBlock = value;
-                        }
-                        else if (part.Contains("inlinees without PGO data", StringComparison.Ordinal))
-                        {
-                            inlineNoPgo = value;
-                        }
-                    }
-                }
-
-                continue;
-            }
-
-            if (line.Contains("code size", StringComparison.OrdinalIgnoreCase))
-            {
-                var digits = new string(line.Where(char.IsDigit).ToArray());
-                if (int.TryParse(digits, out var size))
-                {
-                    codeSize ??= size;
-                }
-            }
-
-            if (!inMethod)
-            {
-                continue;
-            }
-
-            if (line.StartsWith("G_M", StringComparison.Ordinal))
-            {
-                blocks++;
-                continue;
-            }
-
-            var trimmed = line.TrimStart();
-            if (trimmed.Length == 0 || trimmed[0] == ';')
-            {
-                continue;
-            }
-
-            if (char.IsLetter(trimmed[0]))
-            {
-                instructions++;
-            }
-        }
-
-        if (blocks > 0)
-        {
-            blockCount = blocks;
-        }
-
-        if (instructions > 0)
-        {
-            instructionCount = instructions;
-        }
-
         ConsoleThemeHelpers.PrintSection("JIT DISASM SUMMARY", _theme.AccentColor);
-        if (string.IsNullOrWhiteSpace(methodName))
+        if (string.IsNullOrWhiteSpace(summary.MethodName))
         {
             AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]No disassembly markers found.[/]");
             return;
         }
 
-        PrintSummaryLine("Method:", methodName);
-        if (!string.IsNullOrWhiteSpace(tier))
+        PrintSummaryLine("Method:", summary.MethodName);
+        if (!string.IsNullOrWhiteSpace(summary.Tier))
         {
-            PrintSummaryLine("Tier:", tier);
+            PrintSummaryLine("Tier:", summary.Tier);
         }
 
-        if (!string.IsNullOrWhiteSpace(emitting))
+        if (!string.IsNullOrWhiteSpace(summary.Target))
         {
-            PrintSummaryLine("Target:", emitting);
+            PrintSummaryLine("Target:", summary.Target);
         }
 
-        if (!string.IsNullOrWhiteSpace(pgoLine))
+        if (!string.IsNullOrWhiteSpace(summary.PgoLine))
         {
-            PrintSummaryLine("PGO:", pgoLine);
+            PrintSummaryLine("PGO:", summary.PgoLine);
         }
 
-        if (inlinePgo.HasValue || inlineSingleBlock.HasValue || inlineNoPgo.HasValue)
+        if (summary.InlinePgo.HasValue || summary.InlineSingleBlock.HasValue || summary.InlineNoPgo.HasValue)
         {
             var inlineSummary = string.Create(
                 CultureInfo.InvariantCulture,
-                $"PGO={inlinePgo ?? 0}, single-block={inlineSingleBlock ?? 0}, no-PGO={inlineNoPgo ?? 0}");
+                $"PGO={summary.InlinePgo ?? 0}, single-block={summary.InlineSingleBlock ?? 0}, no-PGO={summary.InlineNoPgo ?? 0}");
             PrintSummaryLine("Inlinees:", inlineSummary);
         }
 
-        if (codeSize.HasValue)
+        if (summary.CodeSize.HasValue)
         {
             PrintSummaryLine(
                 "Code size:",
-                string.Create(CultureInfo.InvariantCulture, $"{codeSize.Value} bytes"));
+                string.Create(CultureInfo.InvariantCulture, $"{summary.CodeSize.Value} bytes"));
         }
 
-        if (blockCount.HasValue)
+        if (summary.BlockCount.HasValue)
         {
-            PrintSummaryLine("Blocks:", blockCount.Value.ToString(CultureInfo.InvariantCulture));
+            PrintSummaryLine("Blocks:", summary.BlockCount.Value.ToString(CultureInfo.InvariantCulture));
         }
 
-        if (instructionCount.HasValue)
+        if (summary.InstructionCount.HasValue)
         {
             PrintSummaryLine(
                 "Instructions:",
-                instructionCount.Value.ToString(CultureInfo.InvariantCulture));
+                summary.InstructionCount.Value.ToString(CultureInfo.InvariantCulture));
         }
 
         if (logPath.EndsWith(".color.log", StringComparison.OrdinalIgnoreCase))
@@ -257,37 +133,14 @@ internal sealed partial class JitOutputFormatter
 
     public void PrintInlineSummary(string logPath)
     {
-        if (!File.Exists(logPath))
+        var summary = JitDumpSummaryReader.ReadInlineSummary(logPath);
+        if (summary == null)
         {
             return;
         }
 
-        var methodCount = 0;
-        var inlineSuccess = 0;
-        var inlineFailed = 0;
-
-        foreach (var line in File.ReadLines(logPath))
-        {
-            if (line.StartsWith("*************** JIT compiling ", StringComparison.Ordinal))
-            {
-                methodCount++;
-                continue;
-            }
-
-            if (line.Contains("INLINING SUCCESSFUL", StringComparison.Ordinal))
-            {
-                inlineSuccess++;
-                continue;
-            }
-
-            if (line.Contains("INLINING FAILED", StringComparison.Ordinal))
-            {
-                inlineFailed++;
-            }
-        }
-
         ConsoleThemeHelpers.PrintSection("JIT INLINE SUMMARY", _theme.AccentColor);
-        if (methodCount == 0)
+        if (summary.MethodCount == 0)
         {
             AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]No JIT dump markers found.[/]");
             return;
@@ -295,12 +148,12 @@ internal sealed partial class JitOutputFormatter
 
         AnsiConsole.MarkupLine(
             $"[{_theme.AccentColor}]Methods compiled:[/] " +
-            $"[{_theme.CpuCountColor}]{methodCount.ToString(CultureInfo.InvariantCulture)}[/]");
+            $"[{_theme.CpuCountColor}]{summary.MethodCount.ToString(CultureInfo.InvariantCulture)}[/]");
         AnsiConsole.MarkupLine(
             $"[{_theme.AccentColor}]Inlining:[/] " +
             $"[{_theme.CpuCountColor}]" +
-            $"success={inlineSuccess.ToString(CultureInfo.InvariantCulture)}, " +
-            $"failed={inlineFailed.ToString(CultureInfo.InvariantCulture)}[/]");
+            $"success={summary.InlineSuccess.ToString(CultureInfo.InvariantCulture)}, " +
+            $"failed={summary.InlineFailed.ToString(CultureInfo.InvariantCulture)}[/]");
     }
 
     private void PrintSummaryLine(string label, string value)
@@ -310,7 +163,7 @@ internal sealed partial class JitOutputFormatter
             $"[{_theme.CpuCountColor}]{Markup.Escape(value)}[/]");
     }
 
-    private string ColorizeInstructionSegment(string value, string mnemonicColor, string numberColor)
+    private static string ColorizeInstructionSegment(string value, string mnemonicColor, string numberColor)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
