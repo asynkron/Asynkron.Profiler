@@ -5,8 +5,6 @@ using System.CommandLine.Parsing;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using static Asynkron.Profiler.CallTreeHelpers;
 using Asynkron.Profiler;
@@ -14,10 +12,10 @@ using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
 
 const double HotnessFireThreshold = 0.4d;
-var jitNumberRegex = MyRegex();
-var versionProbeArgs = new[] { "--version" };
 var theme = Theme.Current;
 var renderer = new ProfilerConsoleRenderer(theme);
+var processRunner = new ProcessRunner();
+var jitDumpService = new JitDumpService(theme);
 
 bool TryApplyTheme(string? themeName)
 {
@@ -32,28 +30,9 @@ bool TryApplyTheme(string? themeName)
     Theme.Current = selectedTheme;
     theme = selectedTheme;
     renderer = new ProfilerConsoleRenderer(theme);
+    jitDumpService.UpdateTheme(theme);
     return true;
 }
-
-void AttachProcessDataHandlers(Process process, Action<string> onStdout, Action<string> onStderr)
-{
-    process.OutputDataReceived += (_, e) =>
-    {
-        if (e.Data != null)
-        {
-            onStdout(e.Data);
-        }
-    };
-
-    process.ErrorDataReceived += (_, e) =>
-    {
-        if (e.Data != null)
-        {
-            onStderr(e.Data);
-        }
-    };
-}
-
 
 IReadOnlyList<string> GetUsageExampleLines()
 {
@@ -135,92 +114,10 @@ int GetHelpWidth()
     }
 }
 
-(bool Success, string StdOut, string StdErr) RunProcess(
-    string fileName,
-    IEnumerable<string> args,
-    string? workingDir = null,
-    int timeoutMs = 300000)
-{
-    try
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = fileName,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        foreach (var arg in args)
-        {
-            psi.ArgumentList.Add(arg);
-        }
-
-        if (!string.IsNullOrWhiteSpace(workingDir))
-        {
-            psi.WorkingDirectory = workingDir;
-        }
-
-        using var process = new Process { StartInfo = psi };
-        if (!process.Start())
-        {
-            return (false, string.Empty, "Failed to start process.");
-        }
-
-        var stdout = new StringBuilder();
-        var stderr = new StringBuilder();
-        var stdoutLock = new object();
-        var stderrLock = new object();
-
-        AttachProcessDataHandlers(
-            process,
-            data =>
-            {
-                lock (stdoutLock)
-                {
-                    stdout.AppendLine(data);
-                }
-            },
-            data =>
-            {
-                lock (stderrLock)
-                {
-                    stderr.AppendLine(data);
-                }
-            });
-
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        if (!process.WaitForExit(timeoutMs))
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Ignore kill failures.
-            }
-
-            return (false, stdout.ToString(), $"Process timed out after {timeoutMs} ms.");
-        }
-
-        process.WaitForExit();
-        return (process.ExitCode == 0, stdout.ToString(), stderr.ToString());
-    }
-    catch (Exception ex)
-    {
-        return (false, string.Empty, ex.Message);
-    }
-}
-
 var outputDir = Path.Combine(Environment.CurrentDirectory, "profile-output");
 Directory.CreateDirectory(outputDir);
 var traceAnalyzer = new ProfilerTraceAnalyzer(outputDir);
 
-var toolAvailability = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 const string DotnetTraceInstall = "dotnet tool install -g dotnet-trace";
 const string DotnetGcdumpInstall = "dotnet tool install -g dotnet-gcdump";
 
@@ -233,27 +130,6 @@ if (Console.IsOutputRedirected)
     capabilities.Interactive = false;
     AnsiConsole.Profile.Capabilities = capabilities;
     AnsiConsole.Profile.Width = 200;
-}
-
-bool EnsureToolAvailable(string toolName, string installHint)
-{
-    if (toolAvailability.TryGetValue(toolName, out var cached))
-    {
-        return cached;
-    }
-
-    var (success, _, stderr) = RunProcess(toolName, versionProbeArgs, timeoutMs: 10000);
-    if (!success)
-    {
-        var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{toolName} unavailable:[/] {Markup.Escape(detail)}");
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Install:[/] {Markup.Escape(installHint)}");
-        toolAvailability[toolName] = false;
-        return false;
-    }
-
-    toolAvailability[toolName] = true;
-    return true;
 }
 
 string BuildExceptionProvider()
@@ -273,7 +149,7 @@ TResult? CollectTraceAndAnalyze<TResult>(
     Action<List<string>> configureCollectArgs,
     Func<string, TResult?> analyzeTrace)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!processRunner.EnsureToolAvailable("dotnet-trace", DotnetTraceInstall, theme))
     {
         return default;
     }
@@ -293,7 +169,7 @@ TResult? CollectTraceAndAnalyze<TResult>(
             collectArgs.Add("--");
             collectArgs.AddRange(command);
 
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+            var (success, _, stderr) = processRunner.RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
             if (!success || !File.Exists(traceFile))
             {
                 AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{failureLabel}:[/] {Markup.Escape(stderr)}");
@@ -307,7 +183,7 @@ TResult? CollectTraceAndAnalyze<TResult>(
 
 string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool includeException)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!processRunner.EnsureToolAvailable("dotnet-trace", DotnetTraceInstall, theme))
     {
         return null;
     }
@@ -355,7 +231,7 @@ string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool
             collectArgs.Add(traceFile);
             collectArgs.Add("--");
             collectArgs.AddRange(command);
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+            var (success, _, stderr) = processRunner.RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
 
             if (!success || !File.Exists(traceFile))
             {
@@ -369,7 +245,7 @@ string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool
 
 CpuProfileResult? CpuProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
+    if (!processRunner.EnsureToolAvailable("dotnet-trace", DotnetTraceInstall, theme))
     {
         return null;
     }
@@ -392,7 +268,7 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
                 "--"
             };
             collectArgs.AddRange(command);
-            var (success, _, stderr) = RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
+            var (success, _, stderr) = processRunner.RunProcess("dotnet-trace", collectArgs, timeoutMs: 180000);
 
             if (!success || !File.Exists(traceFile))
             {
@@ -476,9 +352,9 @@ void RunHotJitDisasm(
     {
         AnsiConsole.MarkupLine(
             $"[{theme.AccentColor}]Disassembling ({index}/{hotMethods.Count}):[/] {Markup.Escape(method.DisplayName)}");
-        var dumpFiles = JitDisasmCommand(command, method.Filter, outputDir, suppressNoMarkersWarning: true);
-        var logPath = GetPrimaryJitLogPath(dumpFiles);
-        var hasMarkers = HasJitDisasmMarkers(logPath ?? string.Empty);
+        var dumpFiles = jitDumpService.CaptureDisassembly(command, method.Filter, outputDir, suppressNoMarkersWarning: true);
+        var logPath = jitDumpService.GetPrimaryLogPath(dumpFiles);
+        var hasMarkers = jitDumpService.HasDisassemblyMarkers(logPath ?? string.Empty);
 
         var fallbackFilter = method.Filter;
         var separatorIndex = fallbackFilter.LastIndexOf(':');
@@ -490,9 +366,9 @@ void RunHotJitDisasm(
         if (!hasMarkers && !string.Equals(fallbackFilter, method.Filter, StringComparison.Ordinal))
         {
             AnsiConsole.MarkupLine($"[{theme.AccentColor}]Retrying with filter:[/] {Markup.Escape(fallbackFilter)}");
-            dumpFiles = JitDisasmCommand(command, fallbackFilter, outputDir, suppressNoMarkersWarning: true);
-            logPath = GetPrimaryJitLogPath(dumpFiles);
-            hasMarkers = HasJitDisasmMarkers(logPath ?? string.Empty);
+            dumpFiles = jitDumpService.CaptureDisassembly(command, fallbackFilter, outputDir, suppressNoMarkersWarning: true);
+            logPath = jitDumpService.GetPrimaryLogPath(dumpFiles);
+            hasMarkers = jitDumpService.HasDisassemblyMarkers(logPath ?? string.Empty);
         }
 
         if (!hasMarkers)
@@ -508,7 +384,7 @@ void RunHotJitDisasm(
 
         if (hasMarkers && !string.IsNullOrWhiteSpace(logPath))
         {
-            PrintJitDisasmSummary(logPath);
+            jitDumpService.PrintDisassemblySummary(logPath);
         }
 
         index++;
@@ -751,9 +627,20 @@ MemoryProfileResult BuildMemoryProfileResult(AllocationCallTreeResult callTree)
         null);
 }
 
+HeapProfileResult ParseGcdumpReportOrFallback(bool reportSuccess, string reportOut, string reportErr)
+{
+    if (reportSuccess)
+    {
+        return GcdumpReportParser.Parse(reportOut);
+    }
+
+    AnsiConsole.MarkupLine($"[{theme.AccentColor}]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
+    return new HeapProfileResult(reportOut, []);
+}
+
 HeapProfileResult? HeapProfileCommand(string[] command, string label)
 {
-    if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
+    if (!processRunner.EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall, theme))
     {
         return null;
     }
@@ -793,7 +680,7 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
 
     Thread.Sleep(500);
 
-    var (success, _, stderr) = RunProcess(
+    var (success, _, stderr) = processRunner.RunProcess(
         "dotnet-gcdump",
         new[]
         {
@@ -813,643 +700,12 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
         return null;
     }
 
-    var (reportSuccess, reportOut, reportErr) = RunProcess(
+    var (reportSuccess, reportOut, reportErr) = processRunner.RunProcess(
         "dotnet-gcdump",
         new[] { "report", gcdumpFile },
         timeoutMs: 60000);
 
-    if (reportSuccess)
-    {
-        return ParseGcdumpReport(reportOut);
-    }
-
-    AnsiConsole.MarkupLine($"[{theme.AccentColor}]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
-    return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
-}
-
-string[] JitInlineDumpCommand(
-    string[] command,
-    string jitMethod,
-    string outputDir,
-    string? jitAltJitPath,
-    string? jitAltJitName)
-{
-    if (command.Length == 0)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No command provided for JIT inline dump.[/]");
-        return Array.Empty<string>();
-    }
-
-    var existing = new HashSet<string>(
-        Directory.GetFiles(outputDir, "jitdump.*.txt"),
-        StringComparer.OrdinalIgnoreCase);
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var stdoutFile = Path.Combine(outputDir, $"jitdump_{timestamp}.log");
-    var stderrFile = Path.Combine(outputDir, $"jitdump_{timestamp}.err.log");
-
-    AnsiConsole.MarkupLine($"[dim]Capturing JIT inlining dumps for {Markup.Escape(jitMethod)}...[/]");
-
-    var psi = new ProcessStartInfo
-    {
-        FileName = command[0],
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        WorkingDirectory = outputDir
-    };
-
-    for (var i = 1; i < command.Length; i++)
-    {
-        psi.ArgumentList.Add(command[i]);
-    }
-
-    psi.Environment["COMPlus_JitDump"] = jitMethod;
-    psi.Environment["COMPlus_JitDumpInlinePhases"] = "1";
-    psi.Environment["COMPlus_JitDumpASCII"] = "0";
-    psi.Environment["COMPlus_TieredCompilation"] = "0";
-    psi.Environment["COMPlus_ReadyToRun"] = "0";
-    psi.Environment["COMPlus_ZapDisable"] = "1";
-    psi.Environment["DOTNET_JitDump"] = jitMethod;
-    psi.Environment["DOTNET_JitDumpInlinePhases"] = "1";
-    psi.Environment["DOTNET_JitDumpASCII"] = "0";
-    psi.Environment["DOTNET_TieredCompilation"] = "0";
-    psi.Environment["DOTNET_ReadyToRun"] = "0";
-    psi.Environment["DOTNET_ZapDisable"] = "1";
-    if (!string.IsNullOrWhiteSpace(jitAltJitPath))
-    {
-        var altJitName = string.IsNullOrWhiteSpace(jitAltJitName) ? "clrjit" : jitAltJitName;
-        psi.Environment["COMPlus_AltJit"] = jitMethod;
-        psi.Environment["COMPlus_AltJitName"] = altJitName;
-        psi.Environment["COMPlus_AltJitPath"] = jitAltJitPath;
-        psi.Environment["DOTNET_AltJit"] = jitMethod;
-        psi.Environment["DOTNET_AltJitName"] = altJitName;
-        psi.Environment["DOTNET_AltJitPath"] = jitAltJitPath;
-    }
-
-    using var proc = Process.Start(psi);
-    if (proc == null)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Failed to start process for JIT inline dump.[/]");
-        return Array.Empty<string>();
-    }
-
-    using var stdoutWriter = new StreamWriter(stdoutFile, append: false, Encoding.UTF8);
-    using var stderrWriter = new StreamWriter(stderrFile, append: false, Encoding.UTF8);
-    stdoutWriter.AutoFlush = true;
-    stderrWriter.AutoFlush = true;
-
-    AttachProcessDataHandlers(proc, stdoutWriter.WriteLine, stderrWriter.WriteLine);
-
-    proc.BeginOutputReadLine();
-    proc.BeginErrorReadLine();
-    proc.WaitForExit();
-
-    if (proc.ExitCode != 0)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]JIT dump process exited with code {proc.ExitCode}.[/]");
-    }
-
-    var newJitDumps = Directory.GetFiles(outputDir, "jitdump.*.txt")
-        .Where(file => !existing.Contains(file))
-        .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
-        .Select(Path.GetFullPath);
-
-    var results = new List<string>
-    {
-        Path.GetFullPath(stdoutFile)
-    };
-
-    if (new FileInfo(stderrFile).Length > 0)
-    {
-        results.Add(Path.GetFullPath(stderrFile));
-    }
-
-    results.AddRange(newJitDumps);
-
-    var hasJitDumpMarkers = File.ReadLines(stdoutFile)
-        .Any(line => line.Contains("JIT compiling", StringComparison.Ordinal));
-    if (!hasJitDumpMarkers)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No JIT dump markers found. This usually means a Debug/Checked JIT is required.[/]");
-    }
-
-    return results.ToArray();
-}
-
-string[] JitDisasmCommand(string[] command, string jitMethod, string outputDir, bool suppressNoMarkersWarning = false)
-{
-    if (command.Length == 0)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No command provided for JIT disasm.[/]");
-        return Array.Empty<string>();
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var stdoutFile = Path.Combine(outputDir, $"jitdisasm_{timestamp}.log");
-    var stderrFile = Path.Combine(outputDir, $"jitdisasm_{timestamp}.err.log");
-    var colorFile = Path.Combine(outputDir, $"jitdisasm_{timestamp}.color.log");
-
-    AnsiConsole.MarkupLine($"[dim]Capturing JIT disassembly for {Markup.Escape(jitMethod)}...[/]");
-
-    var psi = new ProcessStartInfo
-    {
-        FileName = command[0],
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        WorkingDirectory = outputDir
-    };
-
-    for (var i = 1; i < command.Length; i++)
-    {
-        psi.ArgumentList.Add(command[i]);
-    }
-
-    psi.Environment["COMPlus_JitDisasm"] = jitMethod;
-    psi.Environment["COMPlus_TieredCompilation"] = "0";
-    psi.Environment["COMPlus_ReadyToRun"] = "0";
-    psi.Environment["COMPlus_ZapDisable"] = "1";
-    psi.Environment["DOTNET_JitDisasm"] = jitMethod;
-    psi.Environment["DOTNET_TieredCompilation"] = "0";
-    psi.Environment["DOTNET_ReadyToRun"] = "0";
-    psi.Environment["DOTNET_ZapDisable"] = "1";
-
-    using var proc = Process.Start(psi);
-    if (proc == null)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Failed to start process for JIT disasm.[/]");
-        return Array.Empty<string>();
-    }
-
-    using var stdoutWriter = new StreamWriter(stdoutFile, append: false, Encoding.UTF8);
-    using var stderrWriter = new StreamWriter(stderrFile, append: false, Encoding.UTF8);
-    using var colorWriter = new StreamWriter(colorFile, append: false, Encoding.UTF8);
-    stdoutWriter.AutoFlush = true;
-    stderrWriter.AutoFlush = true;
-    colorWriter.AutoFlush = true;
-
-    AttachProcessDataHandlers(
-        proc,
-        data =>
-        {
-            stdoutWriter.WriteLine(data);
-            colorWriter.WriteLine(ColorizeJitDisasmLine(data));
-        },
-        stderrWriter.WriteLine);
-
-    proc.BeginOutputReadLine();
-    proc.BeginErrorReadLine();
-    proc.WaitForExit();
-
-    if (proc.ExitCode != 0)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]JIT disasm process exited with code {proc.ExitCode}.[/]");
-    }
-
-    var hasDisasmMarkers = HasJitDisasmMarkers(stdoutFile);
-    if (!hasDisasmMarkers && !suppressNoMarkersWarning)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No JIT disassembly markers found. Check the method filter.[/]");
-    }
-
-    var results = new List<string>
-    {
-        Path.GetFullPath(stdoutFile),
-        Path.GetFullPath(colorFile)
-    };
-
-    if (new FileInfo(stderrFile).Length > 0)
-    {
-        results.Add(Path.GetFullPath(stderrFile));
-    }
-
-    return results.ToArray();
-}
-
-bool HasJitDisasmMarkers(string logPath)
-{
-    if (string.IsNullOrWhiteSpace(logPath) || !File.Exists(logPath))
-    {
-        return false;
-    }
-
-    return File.ReadLines(logPath)
-        .Any(line => line.StartsWith("; Assembly listing for method", StringComparison.Ordinal));
-}
-
-string? GetPrimaryJitLogPath(IEnumerable<string> files)
-{
-    foreach (var file in files)
-    {
-        if (file.EndsWith(".err.log", StringComparison.OrdinalIgnoreCase))
-        {
-            continue;
-        }
-
-        if (file.EndsWith(".log", StringComparison.OrdinalIgnoreCase))
-        {
-            return file;
-        }
-    }
-
-    return null;
-}
-
-string ColorizeJitDisasmLine(string line)
-{
-    if (line.Length == 0)
-    {
-        return line;
-    }
-
-    var commentColor = AnsiColor(theme.TreeGuideColor, dim: true);
-    var labelColor = AnsiColor(theme.CpuCountColor);
-    var mnemonicColor = AnsiColor(theme.TextColor);
-    var numberColor = AnsiColor(theme.LeafHighlightColor);
-
-    if (line.StartsWith(';'))
-    {
-        return WrapAnsi(line, commentColor);
-    }
-
-    var trimmed = line.TrimStart();
-    var indent = line[..(line.Length - trimmed.Length)];
-    if (trimmed.StartsWith("Runs=", StringComparison.Ordinal) ||
-        trimmed.StartsWith("Done in", StringComparison.Ordinal))
-    {
-        return WrapAnsi(line, commentColor);
-    }
-
-    var commentIndex = trimmed.IndexOf(";;", StringComparison.Ordinal);
-    var leading = commentIndex >= 0 ? trimmed[..commentIndex] : trimmed;
-    var trailing = commentIndex >= 0 ? trimmed[commentIndex..] : string.Empty;
-
-    var labelIndex = leading.IndexOf(':');
-    if (labelIndex > 0 && IsLabelToken(leading[..labelIndex]))
-    {
-        var label = leading[..(labelIndex + 1)];
-        var rest = leading[(labelIndex + 1)..];
-        var restColored = ColorizeInstructionSegment(rest, mnemonicColor, numberColor);
-        var highlighted = $"{WrapAnsi(label, labelColor)}{restColored}";
-        if (trailing.Length > 0)
-        {
-            highlighted += WrapAnsi(trailing, commentColor);
-        }
-
-        return $"{indent}{highlighted}";
-    }
-
-    var instructionColored = ColorizeInstructionSegment(leading, mnemonicColor, numberColor);
-    if (trailing.Length > 0)
-    {
-        instructionColored += WrapAnsi(trailing, commentColor);
-    }
-
-    return $"{indent}{instructionColored}";
-}
-
-string ColorizeInstructionSegment(string value, string mnemonicColor, string numberColor)
-{
-    if (string.IsNullOrWhiteSpace(value))
-    {
-        return value;
-    }
-
-    var trimmed = value.TrimStart();
-    var indent = value[..(value.Length - trimmed.Length)];
-    var mnemonicEnd = 0;
-    while (mnemonicEnd < trimmed.Length && !char.IsWhiteSpace(trimmed[mnemonicEnd]))
-    {
-        mnemonicEnd++;
-    }
-
-    if (mnemonicEnd == 0)
-    {
-        return value;
-    }
-
-    var mnemonic = trimmed[..mnemonicEnd];
-    var rest = trimmed[mnemonicEnd..];
-    var restColored = ColorizeNumbers(rest, numberColor);
-    return $"{indent}{WrapAnsi(mnemonic, mnemonicColor)}{restColored}";
-}
-
-string ColorizeNumbers(string text, string color)
-{
-    if (string.IsNullOrEmpty(color))
-    {
-        return text;
-    }
-
-    return jitNumberRegex.Replace(text, match => WrapAnsi(match.Value, color));
-}
-
-bool IsLabelToken(string value)
-{
-    if (string.IsNullOrWhiteSpace(value))
-    {
-        return false;
-    }
-
-    foreach (var ch in value)
-    {
-        if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '.' || ch == '$')
-        {
-            continue;
-        }
-
-        return false;
-    }
-
-    return true;
-}
-
-string AnsiColor(string hex, bool dim = false)
-{
-    if (!TryResolveRgb(hex, out var rgb))
-    {
-        return string.Empty;
-    }
-
-    var dimPrefix = dim ? "\u001b[2m" : string.Empty;
-    return $"{dimPrefix}\u001b[38;2;{rgb.R};{rgb.G};{rgb.B}m";
-}
-
-bool TryResolveRgb(string value, out (byte R, byte G, byte B) rgb)
-{
-    if (ConsoleThemeHelpers.TryParseHexColor(value, out rgb))
-    {
-        return true;
-    }
-
-    var normalized = value?.Trim().ToLowerInvariant();
-    rgb = normalized switch
-    {
-        "yellow" => (255, 255, 0),
-        "red" => (255, 0, 0),
-        "green" => (0, 255, 0),
-        "blue" => (0, 0, 255),
-        "cyan" => (0, 255, 255),
-        "plum1" => (255, 187, 255),
-        _ => default
-    };
-
-    return rgb != default;
-}
-
-string WrapAnsi(string text, string color)
-{
-    if (string.IsNullOrEmpty(color))
-    {
-        return text;
-    }
-
-    const string Reset = "\u001b[0m";
-    return $"{color}{text}{Reset}";
-}
-
-void PrintJitDisasmSummary(string logPath)
-{
-    if (!File.Exists(logPath))
-    {
-        return;
-    }
-
-    string? methodLine = null;
-    string? methodName = null;
-    string? tier = null;
-    string? emitting = null;
-    string? pgoLine = null;
-    int? inlinePgo = null;
-    int? inlineSingleBlock = null;
-    int? inlineNoPgo = null;
-    int? blockCount = null;
-    int? instructionCount = null;
-    int? codeSize = null;
-
-    var inMethod = false;
-    var blocks = 0;
-    var instructions = 0;
-
-    foreach (var line in File.ReadLines(logPath))
-    {
-        if (line.StartsWith("; Assembly listing for method ", StringComparison.Ordinal))
-        {
-            if (methodLine == null)
-            {
-                methodLine = line.Substring("; Assembly listing for method ".Length).Trim();
-                var tierStart = methodLine.LastIndexOf(" (", StringComparison.Ordinal);
-                if (tierStart > 0 && methodLine.EndsWith(')'))
-                {
-                    tier = methodLine[(tierStart + 2)..^1];
-                    methodName = methodLine[..tierStart];
-                }
-                else
-                {
-                    methodName = methodLine;
-                }
-
-                inMethod = true;
-                continue;
-            }
-
-            if (inMethod)
-            {
-                break;
-            }
-        }
-
-        if (line.StartsWith("; Emitting ", StringComparison.Ordinal))
-        {
-            emitting = line[2..].Trim();
-            continue;
-        }
-
-        if (line.StartsWith("; No PGO data", StringComparison.Ordinal) ||
-            line.Contains("inlinees", StringComparison.Ordinal))
-        {
-            pgoLine ??= line.TrimStart(' ', ';').Trim();
-            if (line.Contains("inlinees", StringComparison.Ordinal))
-            {
-                var parts = line.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                foreach (var part in parts)
-                {
-                    if (!int.TryParse(part.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(), out var value))
-                    {
-                        continue;
-                    }
-
-                    if (part.Contains("inlinees with PGO data", StringComparison.Ordinal))
-                    {
-                        inlinePgo = value;
-                    }
-                    else if (part.Contains("single block inlinees", StringComparison.Ordinal))
-                    {
-                        inlineSingleBlock = value;
-                    }
-                    else if (part.Contains("inlinees without PGO data", StringComparison.Ordinal))
-                    {
-                        inlineNoPgo = value;
-                    }
-                }
-            }
-            continue;
-        }
-
-        if (line.Contains("code size", StringComparison.OrdinalIgnoreCase))
-        {
-            var digits = new string(line.Where(char.IsDigit).ToArray());
-            if (int.TryParse(digits, out var size))
-            {
-                codeSize ??= size;
-            }
-        }
-
-        if (!inMethod)
-        {
-            continue;
-        }
-
-        if (line.StartsWith("G_M", StringComparison.Ordinal))
-        {
-            blocks++;
-            continue;
-        }
-
-        var trimmed = line.TrimStart();
-        if (trimmed.Length == 0 || trimmed[0] == ';')
-        {
-            continue;
-        }
-
-        if (char.IsLetter(trimmed[0]))
-        {
-            instructions++;
-        }
-    }
-
-    if (blocks > 0)
-    {
-        blockCount = blocks;
-    }
-
-    if (instructions > 0)
-    {
-        instructionCount = instructions;
-    }
-
-    ConsoleThemeHelpers.PrintSection("JIT DISASM SUMMARY", theme.AccentColor);
-    if (string.IsNullOrWhiteSpace(methodName))
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No disassembly markers found.[/]");
-        return;
-    }
-
-    void PrintSummaryLine(string label, string value)
-    {
-        AnsiConsole.MarkupLine(
-            $"[{theme.AccentColor}]{Markup.Escape(label)}[/] " +
-            $"[{theme.CpuCountColor}]{Markup.Escape(value)}[/]");
-    }
-
-    PrintSummaryLine("Method:", methodName);
-    if (!string.IsNullOrWhiteSpace(tier))
-    {
-        PrintSummaryLine("Tier:", tier);
-    }
-
-    if (!string.IsNullOrWhiteSpace(emitting))
-    {
-        PrintSummaryLine("Target:", emitting);
-    }
-
-    if (!string.IsNullOrWhiteSpace(pgoLine))
-    {
-        PrintSummaryLine("PGO:", pgoLine);
-    }
-
-    if (inlinePgo.HasValue || inlineSingleBlock.HasValue || inlineNoPgo.HasValue)
-    {
-        var inlineSummary = string.Create(
-            CultureInfo.InvariantCulture,
-            $"PGO={inlinePgo ?? 0}, single-block={inlineSingleBlock ?? 0}, no-PGO={inlineNoPgo ?? 0}");
-        PrintSummaryLine("Inlinees:", inlineSummary);
-    }
-
-    if (codeSize.HasValue)
-    {
-        PrintSummaryLine(
-            "Code size:",
-            string.Create(CultureInfo.InvariantCulture, $"{codeSize.Value} bytes"));
-    }
-
-    if (blockCount.HasValue)
-    {
-        PrintSummaryLine("Blocks:", blockCount.Value.ToString(CultureInfo.InvariantCulture));
-    }
-
-    if (instructionCount.HasValue)
-    {
-        PrintSummaryLine(
-            "Instructions:",
-            instructionCount.Value.ToString(CultureInfo.InvariantCulture));
-    }
-
-    if (logPath.EndsWith(".color.log", StringComparison.OrdinalIgnoreCase))
-    {
-        Console.WriteLine();
-        PrintSummaryLine("To browse the assembly, run:", $"less {logPath}");
-    }
-}
-
-void PrintJitInlineSummary(string logPath)
-{
-    if (!File.Exists(logPath))
-    {
-        return;
-    }
-
-    var methodCount = 0;
-    var inlineSuccess = 0;
-    var inlineFailed = 0;
-
-    foreach (var line in File.ReadLines(logPath))
-    {
-        if (line.StartsWith("*************** JIT compiling ", StringComparison.Ordinal))
-        {
-            methodCount++;
-            continue;
-        }
-
-        if (line.Contains("INLINING SUCCESSFUL", StringComparison.Ordinal))
-        {
-            inlineSuccess++;
-            continue;
-        }
-
-        if (line.Contains("INLINING FAILED", StringComparison.Ordinal))
-        {
-            inlineFailed++;
-        }
-    }
-
-    ConsoleThemeHelpers.PrintSection("JIT INLINE SUMMARY", theme.AccentColor);
-    if (methodCount == 0)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No JIT dump markers found.[/]");
-        return;
-    }
-
-    AnsiConsole.MarkupLine(
-        $"[{theme.AccentColor}]Methods compiled:[/] " +
-        $"[{theme.CpuCountColor}]{methodCount.ToString(CultureInfo.InvariantCulture)}[/]");
-    AnsiConsole.MarkupLine(
-        $"[{theme.AccentColor}]Inlining:[/] " +
-        $"[{theme.CpuCountColor}]" +
-        $"success={inlineSuccess.ToString(CultureInfo.InvariantCulture)}, " +
-        $"failed={inlineFailed.ToString(CultureInfo.InvariantCulture)}[/]");
+    return ParseGcdumpReportOrFallback(reportSuccess, reportOut, reportErr);
 }
 
 HeapProfileResult? HeapProfileFromInput(string inputPath)
@@ -1463,85 +719,27 @@ HeapProfileResult? HeapProfileFromInput(string inputPath)
     var extension = Path.GetExtension(inputPath).ToLowerInvariant();
     if (extension == ".gcdump")
     {
-        if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
+        if (!processRunner.EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall, theme))
         {
             return null;
         }
 
-        var (reportSuccess, reportOut, reportErr) = RunProcess(
+        var (reportSuccess, reportOut, reportErr) = processRunner.RunProcess(
             "dotnet-gcdump",
             new[] { "report", inputPath },
             timeoutMs: 60000);
 
-        if (reportSuccess)
-        {
-            return ParseGcdumpReport(reportOut);
-        }
-
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Could not parse gcdump, showing raw output:[/] {Markup.Escape(reportErr)}");
-        return new HeapProfileResult(reportOut, Array.Empty<HeapTypeEntry>());
+        return ParseGcdumpReportOrFallback(reportSuccess, reportOut, reportErr);
     }
 
     if (extension == ".txt" || extension == ".log")
     {
         var report = File.ReadAllText(inputPath);
-        return ParseGcdumpReport(report);
+        return GcdumpReportParser.Parse(report);
     }
 
     AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported heap input:[/] {Markup.Escape(inputPath)}");
     return null;
-}
-
-HeapProfileResult ParseGcdumpReport(string output)
-{
-    var types = new List<HeapTypeEntry>();
-    using var reader = new StringReader(output);
-    var inTable = false;
-
-    string? line;
-    while ((line = reader.ReadLine()) != null)
-    {
-        if (!inTable)
-        {
-            if (line.Contains("Size", StringComparison.Ordinal) &&
-                line.Contains("Count", StringComparison.Ordinal) &&
-                line.Contains("Type", StringComparison.Ordinal))
-            {
-                inTable = true;
-            }
-            continue;
-        }
-
-        if (string.IsNullOrWhiteSpace(line))
-        {
-            continue;
-        }
-
-        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 3)
-        {
-            continue;
-        }
-
-        if (!TryParseLong(parts[0], out var size) || !TryParseLong(parts[1], out var count))
-        {
-            continue;
-        }
-
-        var typeName = string.Join(' ', parts.Skip(2));
-        types.Add(new HeapTypeEntry(size, count, typeName));
-    }
-
-    return new HeapProfileResult(output, types);
-}
-
-bool TryParseLong(string input, out long value)
-{
-    return long.TryParse(
-        input.Replace(",", "", StringComparison.Ordinal),
-        NumberStyles.Integer,
-        CultureInfo.InvariantCulture,
-        out value);
 }
 
 string BuildInputLabel(string inputPath)
@@ -1722,7 +920,7 @@ rootCommand.SetHandler(context =>
     }
 
 
-    var resolver = new ProjectResolver(RunProcess);
+    var resolver = new ProjectResolver(processRunner.RunProcess);
     string label;
     string description;
     if (hasInput)
@@ -1827,8 +1025,8 @@ rootCommand.SetHandler(context =>
         }
 
         var dumpFiles = jitInline
-            ? JitInlineDumpCommand(command, jitMethod!, outputDir, jitAltJitPath, jitAltJitName)
-            : JitDisasmCommand(command, jitMethod!, outputDir);
+            ? jitDumpService.CaptureInlineDump(command, jitMethod!, outputDir, jitAltJitPath, jitAltJitName)
+            : jitDumpService.CaptureDisassembly(command, jitMethod!, outputDir);
         var labelText = jitInline ? "JIT inline dump files" : "JIT disasm files";
         AnsiConsole.MarkupLine($"[{theme.AccentColor}]{labelText}:[/]");
         foreach (var file in dumpFiles)
@@ -1836,16 +1034,16 @@ rootCommand.SetHandler(context =>
             Console.WriteLine(file);
         }
 
-        var logPath = GetPrimaryJitLogPath(dumpFiles);
+        var logPath = jitDumpService.GetPrimaryLogPath(dumpFiles);
         if (!string.IsNullOrWhiteSpace(logPath))
         {
             if (jitInline)
             {
-                PrintJitInlineSummary(logPath);
+                jitDumpService.PrintInlineSummary(logPath);
             }
             else
             {
-                PrintJitDisasmSummary(logPath);
+                jitDumpService.PrintDisassemblySummary(logPath);
             }
         }
 
@@ -1978,10 +1176,3 @@ var parser = new CommandLineBuilder(rootCommand)
     .Build();
 
 return await parser.InvokeAsync(args);
-
-record TableColumnSpec(string Header, bool RightAligned = false);
-partial class Program
-{
-    [GeneratedRegex(@"(?<![A-Za-z0-9_])(#?0x[0-9A-Fa-f]+|#?\d+)(?![A-Za-z0-9_])", RegexOptions.Compiled)]
-    private static partial Regex MyRegex();
-}
