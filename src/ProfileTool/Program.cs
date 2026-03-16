@@ -120,10 +120,17 @@ int GetHelpWidth()
 var outputDir = Path.Combine(Environment.CurrentDirectory, "profile-output");
 Directory.CreateDirectory(outputDir);
 var traceAnalyzer = new ProfilerTraceAnalyzer(outputDir);
-
 var toolAvailability = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 const string DotnetTraceInstall = "dotnet tool install -g dotnet-trace";
 const string DotnetGcdumpInstall = "dotnet tool install -g dotnet-gcdump";
+var profileInputLoader = new ProfileInputLoader(
+    traceAnalyzer,
+    () => theme,
+    EnsureToolAvailable,
+    ProcessRunner.Run,
+    ParseGcdumpReport,
+    AnsiConsole.MarkupLine,
+    DotnetGcdumpInstall);
 
 if (Console.IsOutputRedirected)
 {
@@ -302,41 +309,8 @@ CpuProfileResult? CpuProfileCommand(string[] command, string label)
             }
 
             ctx.Status("Analyzing profile data...");
-            return AnalyzeCpuTrace(traceFile);
+            return profileInputLoader.AnalyzeCpuTrace(traceFile);
         });
-}
-
-CpuProfileResult? AnalyzeSpeedscope(string speedscopePath)
-{
-    try
-    {
-        return ProfilerTraceAnalyzer.AnalyzeSpeedscope(speedscopePath);
-    }
-    catch (Exception ex)
-    {
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Speedscope parse failed:[/] {Markup.Escape(ex.Message)}");
-        return null;
-    }
-}
-
-CpuProfileResult? AnalyzeCpuTrace(string traceFile)
-{
-    try
-    {
-        var result = traceAnalyzer.AnalyzeCpuTrace(traceFile);
-        if (result.AllFunctions.Count == 0)
-        {
-            AnsiConsole.MarkupLine($"[{theme.AccentColor}]No CPU samples found in trace.[/]");
-            return null;
-        }
-
-        return result;
-    }
-    catch (Exception ex)
-    {
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]CPU trace parse failed:[/] {Markup.Escape(ex.Message)}");
-        return null;
-    }
 }
 
 void RunHotJitDisasm(
@@ -416,29 +390,6 @@ void RunHotJitDisasm(
     }
 }
 
-CpuProfileResult? CpuProfileFromInput(string inputPath, string label)
-{
-    if (!File.Exists(inputPath))
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
-    if (extension == ".json")
-    {
-        return AnalyzeSpeedscope(inputPath);
-    }
-
-    if (extension != ".nettrace" && extension != ".etlx")
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported CPU input:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    return AnalyzeCpuTrace(inputPath);
-}
-
 MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
 {
     var callTree = CollectTraceAndAnalyze(
@@ -453,40 +404,15 @@ MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
             collectArgs.Add("--profile");
             collectArgs.Add("gc-verbose");
         },
-        AnalyzeAllocationTrace);
+        profileInputLoader.AnalyzeAllocationTrace);
 
     if (callTree == null)
     {
         return null;
     }
 
-    return BuildMemoryProfileResult(callTree);
+    return profileInputLoader.BuildMemoryProfileResult(callTree);
 }
-
-MemoryProfileResult? MemoryProfileFromInput(string inputPath, string label)
-{
-    if (!File.Exists(inputPath))
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
-    if (extension != ".nettrace" && extension != ".etlx")
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported memory input:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    var callTree = AnalyzeAllocationTrace(inputPath);
-    if (callTree == null)
-    {
-        return null;
-    }
-
-    return BuildMemoryProfileResult(callTree);
-}
-
 ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
 {
     var provider = BuildExceptionProvider();
@@ -502,38 +428,7 @@ ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
             collectArgs.Add("--providers");
             collectArgs.Add(provider);
         },
-        AnalyzeExceptionTrace);
-}
-
-ExceptionProfileResult? ExceptionProfileFromInput(string inputPath, string label)
-{
-    if (!File.Exists(inputPath))
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
-    if (extension != ".nettrace" && extension != ".etlx")
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported exception input:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    return AnalyzeExceptionTrace(inputPath);
-}
-
-ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
-{
-    try
-    {
-        return traceAnalyzer.AnalyzeExceptionTrace(traceFile);
-    }
-    catch (Exception ex)
-    {
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Exception trace parse failed:[/] {Markup.Escape(ex.Message)}");
-        return null;
-    }
+        profileInputLoader.AnalyzeExceptionTrace);
 }
 
 ContentionProfileResult? ContentionProfileCommand(string[] command, string label)
@@ -553,51 +448,7 @@ ContentionProfileResult? ContentionProfileCommand(string[] command, string label
             collectArgs.Add("--providers");
             collectArgs.Add(provider);
         },
-        AnalyzeContentionTrace);
-}
-
-ContentionProfileResult? ContentionProfileFromInput(string inputPath, string label)
-{
-    if (!File.Exists(inputPath))
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
-    if (extension != ".nettrace" && extension != ".etlx")
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported contention input:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    return AnalyzeContentionTrace(inputPath);
-}
-
-ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
-{
-    try
-    {
-        return traceAnalyzer.AnalyzeContentionTrace(traceFile);
-    }
-    catch (Exception ex)
-    {
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Contention trace parse failed:[/] {Markup.Escape(ex.Message)}");
-        return null;
-    }
-}
-
-AllocationCallTreeResult? AnalyzeAllocationTrace(string traceFile)
-{
-    try
-    {
-        return traceAnalyzer.AnalyzeAllocationTrace(traceFile);
-    }
-    catch (Exception ex)
-    {
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Allocation trace parse failed:[/] {Markup.Escape(ex.Message)}");
-        return null;
-    }
+        profileInputLoader.AnalyzeContentionTrace);
 }
 
 bool TryParseHotThreshold(string? input, out double value)
@@ -620,36 +471,6 @@ bool TryParseHotThreshold(string? input, out double value)
     }
 
     return false;
-}
-
-MemoryProfileResult BuildMemoryProfileResult(AllocationCallTreeResult callTree)
-{
-    var allocationEntries = callTree.TypeRoots
-        .OrderByDescending(root => root.TotalBytes)
-        .Take(50)
-        .Select(root => new AllocationEntry(root.Name, root.Count, FormatBytes(root.TotalBytes)))
-        .ToList();
-
-    var totalAllocated = FormatBytes(callTree.TotalBytes);
-
-    return new MemoryProfileResult(
-        null,
-        null,
-        null,
-        totalAllocated,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        totalAllocated,
-        allocationEntries,
-        callTree,
-        null,
-        null);
 }
 
 HeapProfileResult? HeapProfileCommand(string[] command, string label)
@@ -1347,40 +1168,6 @@ void PrintJitInlineSummary(string logPath)
         $"failed={inlineFailed.ToString(CultureInfo.InvariantCulture)}[/]");
 }
 
-HeapProfileResult? HeapProfileFromInput(string inputPath)
-{
-    if (!File.Exists(inputPath))
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Input file not found:[/] {Markup.Escape(inputPath)}");
-        return null;
-    }
-
-    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
-    if (extension == ".gcdump")
-    {
-        if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
-        {
-            return null;
-        }
-
-        return GcdumpReportLoader.Load(
-            inputPath,
-            theme,
-            ProcessRunner.Run,
-            ParseGcdumpReport,
-            AnsiConsole.MarkupLine);
-    }
-
-    if (extension == ".txt" || extension == ".log")
-    {
-        var report = File.ReadAllText(inputPath);
-        return ParseGcdumpReport(report);
-    }
-
-    AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Unsupported heap input:[/] {Markup.Escape(inputPath)}");
-    return null;
-}
-
 HeapProfileResult ParseGcdumpReport(string output)
 {
     var types = new List<HeapTypeEntry>();
@@ -1431,57 +1218,6 @@ bool TryParseLong(string input, out long value)
         NumberStyles.Integer,
         CultureInfo.InvariantCulture,
         out value);
-}
-
-string BuildInputLabel(string inputPath)
-{
-    var name = Path.GetFileNameWithoutExtension(inputPath);
-    if (string.IsNullOrWhiteSpace(name))
-    {
-        name = "input";
-    }
-
-    foreach (var invalid in Path.GetInvalidFileNameChars())
-    {
-        name = name.Replace(invalid, '_');
-    }
-
-    return name;
-}
-
-void ApplyInputDefaults(
-    string inputPath,
-    ref bool runCpu,
-    ref bool runMemory,
-    ref bool runHeap,
-    ref bool runException,
-    ref bool runContention)
-{
-    var extension = Path.GetExtension(inputPath).ToLowerInvariant();
-    switch (extension)
-    {
-        case ".json":
-            runCpu = true;
-            break;
-        case ".nettrace":
-            runCpu = true;
-            runException = true;
-            runContention = true;
-            break;
-        case ".etlx":
-            runMemory = true;
-            runException = true;
-            runContention = true;
-            break;
-        case ".gcdump":
-        case ".txt":
-        case ".log":
-            runHeap = true;
-            break;
-        default:
-            runCpu = true;
-            break;
-    }
 }
 
 // Command-line setup
@@ -1616,11 +1352,11 @@ rootCommand.SetHandler(context =>
     string description;
     if (hasInput)
     {
-        label = BuildInputLabel(inputPath!);
+        label = ProfileInputLoader.BuildInputLabel(inputPath!);
         description = inputPath!;
         if (!hasExplicitModes)
         {
-            ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap, ref runException, ref runContention);
+            ProfileInputLoader.ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap, ref runException, ref runContention);
         }
     }
     else
@@ -1770,14 +1506,14 @@ rootCommand.SetHandler(context =>
     {
         Console.WriteLine($"{label} - cpu+memory");
         var cpuResults = hasInput
-            ? CpuProfileFromInput(inputPath!, label)
+            ? profileInputLoader.LoadCpu(inputPath!)
             : sharedTraceFile != null
-                ? AnalyzeCpuTrace(sharedTraceFile)
+                ? profileInputLoader.AnalyzeCpuTrace(sharedTraceFile)
                 : CpuProfileCommand(command, label);
         var memoryResults = hasInput
-            ? MemoryProfileFromInput(inputPath!, label)
+            ? profileInputLoader.LoadMemory(inputPath!)
             : sharedTraceFile != null
-                ? MemoryProfileFromInput(sharedTraceFile, label)
+                ? profileInputLoader.LoadMemory(sharedTraceFile)
                 : MemoryProfileCommand(command, label);
 
         if (cpuResults != null)
@@ -1795,9 +1531,9 @@ rootCommand.SetHandler(context =>
         {
             Console.WriteLine($"{label} - cpu");
             var results = hasInput
-                ? CpuProfileFromInput(inputPath!, label)
+                ? profileInputLoader.LoadCpu(inputPath!)
                 : sharedTraceFile != null
-                    ? AnalyzeCpuTrace(sharedTraceFile)
+                    ? profileInputLoader.AnalyzeCpuTrace(sharedTraceFile)
                     : CpuProfileCommand(command, label);
             RenderCpuResults(results);
         }
@@ -1806,9 +1542,9 @@ rootCommand.SetHandler(context =>
         {
             Console.WriteLine($"{label} - memory");
             var results = hasInput
-                ? MemoryProfileFromInput(inputPath!, label)
+                ? profileInputLoader.LoadMemory(inputPath!)
                 : sharedTraceFile != null
-                    ? MemoryProfileFromInput(sharedTraceFile, label)
+                    ? profileInputLoader.LoadMemory(sharedTraceFile)
                     : MemoryProfileCommand(command, label);
             RenderMemoryResults(results);
         }
@@ -1818,9 +1554,9 @@ rootCommand.SetHandler(context =>
     {
         Console.WriteLine($"{label} - exception");
         var results = hasInput
-            ? ExceptionProfileFromInput(inputPath!, label)
+            ? profileInputLoader.LoadException(inputPath!)
             : sharedTraceFile != null
-                ? ExceptionProfileFromInput(sharedTraceFile, label)
+                ? profileInputLoader.LoadException(sharedTraceFile)
                 : ExceptionProfileCommand(command, label);
         RenderExceptionResults(results);
     }
@@ -1829,7 +1565,7 @@ rootCommand.SetHandler(context =>
     {
         Console.WriteLine($"{label} - contention");
         var results = hasInput
-            ? ContentionProfileFromInput(inputPath!, label)
+            ? profileInputLoader.LoadContention(inputPath!)
             : ContentionProfileCommand(command, label);
         RenderContentionResults(results);
     }
@@ -1838,7 +1574,7 @@ rootCommand.SetHandler(context =>
     {
         Console.WriteLine($"{label} - heap");
         var results = hasInput
-            ? HeapProfileFromInput(inputPath!)
+            ? profileInputLoader.LoadHeap(inputPath!)
             : HeapProfileCommand(command, label);
         RenderHeapResults(results);
     }
