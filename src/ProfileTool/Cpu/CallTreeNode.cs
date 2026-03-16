@@ -58,35 +58,22 @@ public sealed class CallTreeNode
         }
 
         AllocationBytes += bytes;
-        if (AllocationCount < int.MaxValue)
-        {
-            AllocationCount += 1;
-        }
+        AllocationCount = IncrementIfPossible(AllocationCount);
     }
 
     public void AddAllocation(string typeName, long bytes)
     {
+        AddAllocationTotals(bytes);
         if (bytes <= 0)
         {
             return;
         }
 
-        AddAllocationTotals(bytes);
-
         AllocationByType ??= new Dictionary<string, long>(StringComparer.Ordinal);
-        AllocationByType[typeName] = AllocationByType.TryGetValue(typeName, out var existing)
-            ? existing + bytes
-            : bytes;
+        AddToTotals(AllocationByType, typeName, bytes);
 
         AllocationCountByType ??= new Dictionary<string, int>(StringComparer.Ordinal);
-        if (AllocationCountByType.TryGetValue(typeName, out var count))
-        {
-            AllocationCountByType[typeName] = count < int.MaxValue ? count + 1 : count;
-        }
-        else
-        {
-            AllocationCountByType[typeName] = 1;
-        }
+        IncrementCount(AllocationCountByType, typeName);
     }
 
     public void AddExceptionTotals(long count)
@@ -101,10 +88,7 @@ public sealed class CallTreeNode
 
     public void IncrementCalls()
     {
-        if (Calls < int.MaxValue)
-        {
-            Calls += 1;
-        }
+        Calls = IncrementIfPossible(Calls);
     }
 
     public void AddException(string typeName, long count)
@@ -117,8 +101,29 @@ public sealed class CallTreeNode
         AddExceptionTotals(count);
 
         ExceptionByType ??= new Dictionary<string, long>(StringComparer.Ordinal);
-        ExceptionByType[typeName] = ExceptionByType.TryGetValue(typeName, out var existing)
-            ? existing + count
-            : count;
+        AddToTotals(ExceptionByType, typeName, count);
+    }
+
+    private static void AddToTotals(Dictionary<string, long> totals, string key, long amount)
+    {
+        totals[key] = totals.TryGetValue(key, out var existing)
+            ? existing + amount
+            : amount;
+    }
+
+    private static void IncrementCount(Dictionary<string, int> counts, string key)
+    {
+        counts.TryGetValue(key, out var count);
+        counts[key] = count < int.MaxValue ? count + 1 : count;
+    }
+
+    private static int IncrementIfPossible(int value)
+    {
+        if (value < int.MaxValue)
+        {
+            return value + 1;
+        }
+
+        return value;
     }
 }

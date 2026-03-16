@@ -40,7 +40,7 @@ internal sealed class JitCommandRunner
 
         AnsiConsole.MarkupLine($"[dim]Capturing JIT inlining dumps for {Markup.Escape(jitMethod)}...[/]");
 
-        var psi = CreateProcessStartInfo(command);
+        var psi = ProcessStartInfoBuilder.Create(command, _outputDirectory);
         psi.Environment["COMPlus_JitDump"] = jitMethod;
         psi.Environment["COMPlus_JitDumpInlinePhases"] = "1";
         psi.Environment["COMPlus_JitDumpASCII"] = "0";
@@ -122,7 +122,7 @@ internal sealed class JitCommandRunner
 
         AnsiConsole.MarkupLine($"[dim]Capturing JIT disassembly for {Markup.Escape(jitMethod)}...[/]");
 
-        var psi = CreateProcessStartInfo(command);
+        var psi = ProcessStartInfoBuilder.Create(command, _outputDirectory);
         psi.Environment["COMPlus_JitDisasm"] = jitMethod;
         psi.Environment["COMPlus_TieredCompilation"] = "0";
         psi.Environment["COMPlus_ReadyToRun"] = "0";
@@ -207,27 +207,6 @@ internal sealed class JitCommandRunner
 
         return null;
     }
-
-    private ProcessStartInfo CreateProcessStartInfo(string[] command)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = command[0],
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = _outputDirectory
-        };
-
-        for (var i = 1; i < command.Length; i++)
-        {
-            psi.ArgumentList.Add(command[i]);
-        }
-
-        return psi;
-    }
-
     private static void AppendIfNotEmpty(List<string> results, string path)
     {
         if (new FileInfo(path).Length > 0)

@@ -491,20 +491,7 @@ HeapProfileResult? HeapProfileCommand(string[] command, string label)
         return null;
     }
 
-    var psi = new ProcessStartInfo
-    {
-        FileName = command[0],
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true
-    };
-
-    for (var i = 1; i < command.Length; i++)
-    {
-        psi.ArgumentList.Add(command[i]);
-    }
-
+    var psi = ProcessStartInfoBuilder.Create(command);
     using var proc = Process.Start(psi);
 
     if (proc == null)

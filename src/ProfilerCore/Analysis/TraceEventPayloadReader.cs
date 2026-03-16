@@ -54,17 +54,10 @@ internal static class TraceEventPayloadReader
     {
         foreach (var name in names)
         {
-            try
+            var value = TryGetPayload(data, name);
+            if (value != null)
             {
-                var value = data.PayloadByName(name);
-                if (value != null)
-                {
-                    return value.ToString();
-                }
-            }
-            catch
-            {
-                // Ignore missing payloads.
+                return value.ToString();
             }
         }
 
@@ -73,26 +66,31 @@ internal static class TraceEventPayloadReader
 
     private static long? TryGetPayloadLong(TraceEvent data, string name)
     {
+        var value = TryGetPayload(data, name);
+        if (value == null)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            byte v => v,
+            sbyte v => v,
+            short v => v,
+            ushort v => v,
+            int v => v,
+            uint v => v,
+            long v => v,
+            ulong v => v <= long.MaxValue ? (long)v : null,
+            _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
+        };
+    }
+
+    private static object? TryGetPayload(TraceEvent data, string name)
+    {
         try
         {
-            var value = data.PayloadByName(name);
-            if (value == null)
-            {
-                return null;
-            }
-
-            return value switch
-            {
-                byte v => v,
-                sbyte v => v,
-                short v => v,
-                ushort v => v,
-                int v => v,
-                uint v => v,
-                long v => v,
-                ulong v => v <= long.MaxValue ? (long)v : null,
-                _ => Convert.ToInt64(value, CultureInfo.InvariantCulture)
-            };
+            return data.PayloadByName(name);
         }
         catch
         {

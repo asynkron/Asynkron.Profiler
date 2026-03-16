@@ -34,25 +34,7 @@ internal static class ProcessRunner
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = fileName,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            foreach (var arg in args)
-            {
-                psi.ArgumentList.Add(arg);
-            }
-
-            if (!string.IsNullOrWhiteSpace(workingDir))
-            {
-                psi.WorkingDirectory = workingDir;
-            }
-
+            var psi = ProcessStartInfoBuilder.Create(fileName, args, workingDir);
             using var process = new Process { StartInfo = psi };
             if (!process.Start())
             {
