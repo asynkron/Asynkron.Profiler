@@ -5,6 +5,8 @@ namespace Asynkron.Profiler;
 
 public sealed class CallTreeNode
 {
+    private const string UnknownRootName = "Total";
+
     public CallTreeNode(int frameIdx, string name)
     {
         FrameIdx = frameIdx;
@@ -52,24 +54,15 @@ public sealed class CallTreeNode
 
     public void AddAllocationTotals(long bytes)
     {
-        if (bytes <= 0)
-        {
-            return;
-        }
+        if (!IsPositive(bytes)) return;
 
         AllocationBytes += bytes;
-        if (AllocationCount < int.MaxValue)
-        {
-            AllocationCount += 1;
-        }
+        AllocationCount = IncrementClamped(AllocationCount);
     }
 
     public void AddAllocation(string typeName, long bytes)
     {
-        if (bytes <= 0)
-        {
-            return;
-        }
+        if (!IsPositive(bytes)) return;
 
         AddAllocationTotals(bytes);
 
@@ -79,40 +72,26 @@ public sealed class CallTreeNode
             : bytes;
 
         AllocationCountByType ??= new Dictionary<string, int>(StringComparer.Ordinal);
-        if (AllocationCountByType.TryGetValue(typeName, out var count))
-        {
-            AllocationCountByType[typeName] = count < int.MaxValue ? count + 1 : count;
-        }
-        else
-        {
-            AllocationCountByType[typeName] = 1;
-        }
+        AllocationCountByType[typeName] = AllocationCountByType.TryGetValue(typeName, out var count)
+            ? IncrementClamped(count)
+            : 1;
     }
 
     public void AddExceptionTotals(long count)
     {
-        if (count <= 0)
-        {
-            return;
-        }
+        if (!IsPositive(count)) return;
 
         ExceptionCount += count;
     }
 
     public void IncrementCalls()
     {
-        if (Calls < int.MaxValue)
-        {
-            Calls += 1;
-        }
+        Calls = IncrementClamped(Calls);
     }
 
     public void AddException(string typeName, long count)
     {
-        if (count <= 0)
-        {
-            return;
-        }
+        if (!IsPositive(count)) return;
 
         AddExceptionTotals(count);
 
@@ -120,5 +99,20 @@ public sealed class CallTreeNode
         ExceptionByType[typeName] = ExceptionByType.TryGetValue(typeName, out var existing)
             ? existing + count
             : count;
+    }
+
+    public static CallTreeNode CreateRoot()
+    {
+        return new CallTreeNode(-1, UnknownRootName);
+    }
+
+    private static bool IsPositive(long value)
+    {
+        return value > 0;
+    }
+
+    private static int IncrementClamped(int value)
+    {
+        return value < int.MaxValue ? value + 1 : value;
     }
 }

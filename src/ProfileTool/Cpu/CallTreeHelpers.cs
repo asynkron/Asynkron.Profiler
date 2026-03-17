@@ -176,21 +176,12 @@ public static class CallTreeHelpers
             return false;
         }
 
-        if (trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Contains("Unmanaged Code", StringComparison.OrdinalIgnoreCase))
+        if (FrameNameClassifier.IsExplicitUnmanagedCode(trimmed))
         {
             return true;
         }
 
-        foreach (var ch in trimmed)
-        {
-            if (char.IsLetter(ch))
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return !FrameNameClassifier.ContainsLetter(trimmed);
     }
 
     public static string FormatFunctionDisplayName(string rawName)
@@ -266,18 +257,7 @@ public static class CallTreeHelpers
                trimmed.Contains("Thread", StringComparison.Ordinal) ||
                trimmed.Contains("Threads", StringComparison.Ordinal) ||
                trimmed.Contains("Process", StringComparison.Ordinal) ||
-               StartsWithDigits(trimmed) ||
-               StartsWithDigits(formatted);
-    }
-
-    private static bool StartsWithDigits(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return false;
-        }
-
-        var trimmed = name.TrimStart();
-        return trimmed.Length > 0 && char.IsDigit(trimmed[0]);
+               FrameNameClassifier.StartsWithDigit(trimmed) ||
+               FrameNameClassifier.StartsWithDigit(formatted);
     }
 }

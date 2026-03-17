@@ -8,6 +8,11 @@ namespace Asynkron.Profiler;
 
 internal sealed class ProfilerConsoleTableWriter
 {
+    internal readonly record struct TableRenderOptions(
+        string? Title = null,
+        bool HideHeaders = false,
+        string? HeaderColor = null);
+
     private static readonly TableColumnSpec[] SummaryColumns =
     {
         new(string.Empty),
@@ -24,11 +29,9 @@ internal sealed class ProfilerConsoleTableWriter
     public static Table BuildTableWithRows(
         IReadOnlyList<TableColumnSpec> columns,
         IEnumerable<IReadOnlyList<string>> rows,
-        string? title = null,
-        bool hideHeaders = false,
-        string? headerColor = null)
+        TableRenderOptions? options = null)
     {
-        var table = BuildTable(columns, title, hideHeaders, headerColor);
+        var table = BuildTable(columns, options ?? default);
         foreach (var row in rows)
         {
             table.AddRow(row.ToArray());
@@ -37,20 +40,12 @@ internal sealed class ProfilerConsoleTableWriter
         return table;
     }
 
-    public static void WriteTable(
-        IReadOnlyList<TableColumnSpec> columns,
-        IEnumerable<IReadOnlyList<string>> rows,
-        string? title = null,
-        bool hideHeaders = false,
-        string? headerColor = null)
-    {
-        AnsiConsole.Write(BuildTableWithRows(columns, rows, title, hideHeaders, headerColor));
-    }
+    public static void WriteTable(IReadOnlyList<TableColumnSpec> columns, IEnumerable<IReadOnlyList<string>> rows, TableRenderOptions? options = null) => AnsiConsole.Write(BuildTableWithRows(columns, rows, options));
 
     public static void WriteSummaryTable(IEnumerable<IReadOnlyList<string>> rows)
     {
         ConsoleThemeHelpers.PrintSection("Summary");
-        WriteTable(SummaryColumns, rows, hideHeaders: true);
+        WriteTable(SummaryColumns, rows, new TableRenderOptions(HideHeaders: true));
     }
 
     public static Rows BuildTableBlock(Table table, string title, string color)
@@ -126,18 +121,14 @@ internal sealed class ProfilerConsoleTableWriter
         AnsiConsole.Write(table);
     }
 
-    private static Table BuildTable(
-        IReadOnlyList<TableColumnSpec> columns,
-        string? title = null,
-        bool hideHeaders = false,
-        string? headerColor = null)
+    private static Table BuildTable(IReadOnlyList<TableColumnSpec> columns, TableRenderOptions options)
     {
         var table = new Table
         {
             Expand = false,
-            ShowHeaders = !hideHeaders,
+            ShowHeaders = !options.HideHeaders,
             ShowRowSeparators = false,
-            Title = title != null ? new TableTitle(title) : null
+            Title = options.Title != null ? new TableTitle(options.Title) : null
         };
 
         table.Border(TableBorder.Rounded);
@@ -146,9 +137,9 @@ internal sealed class ProfilerConsoleTableWriter
         foreach (var column in columns)
         {
             var columnHeader = column.Header;
-            if (!string.IsNullOrWhiteSpace(headerColor))
+            if (!string.IsNullOrWhiteSpace(options.HeaderColor))
             {
-                columnHeader = $"[{headerColor}]{Markup.Escape(columnHeader)}[/]";
+                columnHeader = $"[{options.HeaderColor}]{Markup.Escape(columnHeader)}[/]";
             }
 
             var tableColumn = new TableColumn(columnHeader);

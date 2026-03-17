@@ -19,13 +19,25 @@ public static class CallTreeFilters
                 includeRuntime,
                 child => isRuntimeNoise(child.Name),
                 child => child.Children.Values),
-            child => GetCallTreeTime(child, useSelfTime),
+            child => CallTreeHelpers.GetCallTreeTime(child, useSelfTime),
             maxWidth,
             siblingCutoffPercent);
     }
 
-    private static double GetCallTreeTime(CallTreeNode node, bool useSelfTime)
+    public static bool HasVisibleChildren(
+        CallTreeNode node,
+        bool includeRuntime,
+        bool useSelfTime,
+        int maxWidth,
+        int siblingCutoffPercent,
+        Func<string, bool> isRuntimeNoise)
     {
-        return useSelfTime ? node.Self : node.Total;
+        return GetVisibleChildren(
+            node,
+            includeRuntime,
+            useSelfTime,
+            maxWidth,
+            siblingCutoffPercent,
+            isRuntimeNoise).Count > 0;
     }
 }

@@ -257,12 +257,13 @@ internal sealed class ProfilerCallTreeRenderer
         }
 
         var basePrefix = continuationPrefix ?? prefix;
-        var children = CallTreeVisibility.GetVisibleChildren(
+        var children = CallTreeFilters.GetVisibleChildren(
             node,
             context.IncludeRuntime,
             context.UseSelfTime,
             context.Traversal.MaxWidth,
-            context.Traversal.SiblingCutoffPercent);
+            context.Traversal.SiblingCutoffPercent,
+            CallTreeHelpers.IsRuntimeNoise);
 
         for (var index = 0; index < children.Count; index++)
         {
@@ -300,12 +301,13 @@ internal sealed class ProfilerCallTreeRenderer
             return;
         }
 
-        var children = CallTreeVisibility.GetVisibleChildren(
+        var children = CallTreeFilters.GetVisibleChildren(
             node,
             context.IncludeRuntime,
             context.UseSelfTime,
             context.Traversal.MaxWidth,
-            context.Traversal.SiblingCutoffPercent);
+            context.Traversal.SiblingCutoffPercent,
+            CallTreeHelpers.IsRuntimeNoise);
 
         foreach (var child in children)
         {
@@ -343,12 +345,13 @@ internal sealed class ProfilerCallTreeRenderer
     {
         var isSpecialLeaf = ShouldStopAtLeaf(GetCallTreeMatchName(child));
         var isLeaf = isSpecialLeaf || depth >= context.Traversal.MaxDepth ||
-                     !CallTreeVisibility.HasVisibleChildren(
+                     !CallTreeFilters.HasVisibleChildren(
                          child,
                          context.IncludeRuntime,
                          context.UseSelfTime,
                          context.Traversal.MaxWidth,
-                         context.Traversal.SiblingCutoffPercent);
+                         context.Traversal.SiblingCutoffPercent,
+                         CallTreeHelpers.IsRuntimeNoise);
 
         var childNode = parent.AddNode(_formatter.FormatCallTreeLine(
             child,

@@ -10,4 +10,23 @@ public sealed record CpuProfileResult(
     string? SpeedscopePath,
     string TimeUnitLabel,
     string CountLabel,
-    string CountSuffix);
+    string CountSuffix)
+{
+    public static CpuProfileResult CreateTraceResult(
+        IReadOnlyList<FunctionSample> allFunctions,
+        double totalTime,
+        CallTreeNode callTreeRoot,
+        double callTreeTotal,
+        string? sourcePath)
+    {
+        return new CpuProfileResult(
+            allFunctions,
+            totalTime,
+            callTreeRoot,
+            callTreeTotal,
+            sourcePath,
+            "ms",
+            "Samples",
+            " samp");
+    }
+}

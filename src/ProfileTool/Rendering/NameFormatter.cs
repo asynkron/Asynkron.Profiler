@@ -99,13 +99,7 @@ public static class NameFormatter
 
     private static bool IsUnmanagedCode(string name)
     {
-        var trimmed = name?.Trim() ?? string.Empty;
-        if (trimmed.Length == 0)
-        {
-            return false;
-        }
-
-        return trimmed.Contains("UNMANAGED_CODE_TIME", StringComparison.OrdinalIgnoreCase);
+        return FrameNameClassifier.IsExplicitUnmanagedCode(name);
     }
 
     private static string StripParameterList(string name)
@@ -136,7 +130,7 @@ public static class NameFormatter
     private static string EnsureReadableName(string name)
     {
         var trimmed = name?.Trim() ?? string.Empty;
-        if (!HasLetter(trimmed))
+        if (!FrameNameClassifier.ContainsLetter(trimmed))
         {
             return "Unmanaged Code";
         }
@@ -180,20 +174,6 @@ public static class NameFormatter
 
         return -1;
     }
-
-    private static bool HasLetter(string value)
-    {
-        foreach (var ch in value)
-        {
-            if (char.IsLetter(ch))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static string? FormatCompilerGeneratedMethod(string typePart, string methodPart)
     {
         if (string.IsNullOrWhiteSpace(typePart) || string.IsNullOrWhiteSpace(methodPart))
