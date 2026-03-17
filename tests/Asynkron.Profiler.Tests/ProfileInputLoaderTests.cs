@@ -31,7 +31,7 @@ public sealed class ProfileInputLoaderTests
             .ToArray();
         var callTree = new AllocationCallTreeResult(roots.Sum(root => root.TotalBytes), roots.Sum(root => root.Count), roots);
 
-        var result = ProfileInputLoader.BuildMemoryProfileResult(callTree);
+        var result = MemoryProfileResultFactory.Create(callTree);
 
         Assert.Equal("1.50 KB", result.TotalAllocated);
         Assert.Equal("1.50 KB", result.AllocationTotal);
@@ -103,7 +103,7 @@ public sealed class ProfileInputLoaderTests
     [Fact]
     public void BuildInputLabel_FallsBackToInputWhenFileNameIsMissing()
     {
-        var label = ProfileInputLoader.BuildInputLabel(string.Empty);
+        var label = ProfileInputLabelBuilder.Build(string.Empty);
 
         Assert.Equal("input", label);
     }
@@ -122,7 +122,7 @@ public sealed class ProfileInputLoaderTests
         var runException = false;
         var runContention = false;
 
-        ProfileInputLoader.ApplyInputDefaults(
+        ProfileInputDefaults.Apply(
             inputPath,
             ref runCpu,
             ref runMemory,

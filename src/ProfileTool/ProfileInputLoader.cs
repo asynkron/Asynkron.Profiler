@@ -2,9 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Linq;
 using Spectre.Console;
-using static Asynkron.Profiler.CallTreeHelpers;
 
 namespace Asynkron.Profiler;
 
@@ -66,7 +64,7 @@ internal sealed class ProfileInputLoader
         }
 
         var callTree = AnalyzeAllocationTrace(inputPath);
-        return callTree == null ? null : BuildMemoryProfileResult(callTree);
+        return callTree == null ? null : MemoryProfileResultFactory.Create(callTree);
     }
 
     public ExceptionProfileResult? LoadException(string inputPath)
@@ -177,75 +175,6 @@ internal sealed class ProfileInputLoader
         {
             _writeLine($"[{_getTheme().AccentColor}]Contention trace parse failed:[/] {Markup.Escape(ex.Message)}");
             return null;
-        }
-    }
-
-    public static MemoryProfileResult BuildMemoryProfileResult(AllocationCallTreeResult callTree)
-    {
-        var allocationEntries = callTree.TypeRoots
-            .OrderByDescending(root => root.TotalBytes)
-            .Take(50)
-            .Select(root => new AllocationEntry(root.Name, root.Count, FormatBytes(root.TotalBytes)))
-            .ToList();
-
-        var totalAllocated = FormatBytes(callTree.TotalBytes);
-
-        return new MemoryProfileResult(
-            null,
-            null,
-            null,
-            totalAllocated,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            totalAllocated,
-            allocationEntries,
-            callTree,
-            null,
-            null);
-    }
-
-    public static string BuildInputLabel(string inputPath)
-    {
-        return FileLabelSanitizer.Sanitize(Path.GetFileNameWithoutExtension(inputPath), "input");
-    }
-
-    public static void ApplyInputDefaults(
-        string inputPath,
-        ref bool runCpu,
-        ref bool runMemory,
-        ref bool runHeap,
-        ref bool runException,
-        ref bool runContention)
-    {
-        switch (GetNormalizedExtension(inputPath))
-        {
-            case ".json":
-                runCpu = true;
-                break;
-            case ".nettrace":
-                runCpu = true;
-                runException = true;
-                runContention = true;
-                break;
-            case ".etlx":
-                runMemory = true;
-                runException = true;
-                runContention = true;
-                break;
-            case ".gcdump":
-            case ".txt":
-            case ".log":
-                runHeap = true;
-                break;
-            default:
-                runCpu = true;
-                break;
         }
     }
 

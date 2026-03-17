@@ -298,11 +298,11 @@ rootCommand.SetHandler(context =>
     string description;
     if (hasInput)
     {
-        label = ProfileInputLoader.BuildInputLabel(inputPath!);
+        label = ProfileInputLabelBuilder.Build(inputPath!);
         description = inputPath!;
         if (!hasExplicitModes)
         {
-            ProfileInputLoader.ApplyInputDefaults(inputPath!, ref runCpu, ref runMemory, ref runHeap, ref runException, ref runContention);
+            ProfileInputDefaults.Apply(inputPath!, ref runCpu, ref runMemory, ref runHeap, ref runException, ref runContention);
         }
     }
     else
@@ -544,5 +544,3 @@ var parser = new CommandLineBuilder(rootCommand)
     .Build();
 
 return await parser.InvokeAsync(args);
-
-record TableColumnSpec(string Header, bool RightAligned = false);
