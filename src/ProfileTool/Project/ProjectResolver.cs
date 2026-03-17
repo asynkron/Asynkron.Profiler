@@ -50,11 +50,8 @@ internal sealed class ProjectResolver
             return null;
         }
 
-        var buildArgs = new[] { "build", "-c", "Release", fullSolutionPath };
-        var (buildSuccess, _, buildErr) = _runProcess("dotnet", buildArgs, null, 600000);
-        if (!buildSuccess)
+        if (!TryBuildTarget(fullSolutionPath))
         {
-            ProjectResolverReporter.WriteBuildFailed(buildErr);
             return null;
         }
 
@@ -95,11 +92,8 @@ internal sealed class ProjectResolver
 
         if (buildProject)
         {
-            var buildArgs = new[] { "build", "-c", "Release", fullProjectPath };
-            var (buildSuccess, _, buildErr) = _runProcess("dotnet", buildArgs, null, 600000);
-            if (!buildSuccess)
+            if (!TryBuildTarget(fullProjectPath))
             {
-                ProjectResolverReporter.WriteBuildFailed(buildErr);
                 return null;
             }
         }
@@ -153,6 +147,19 @@ internal sealed class ProjectResolver
     private static string BuildCommandDescription(string[] command)
     {
         return command.Length == 0 ? string.Empty : string.Join(' ', command);
+    }
+
+    private bool TryBuildTarget(string targetPath)
+    {
+        var buildArgs = new[] { "build", "-c", "Release", targetPath };
+        var (buildSuccess, _, buildErr) = _runProcess("dotnet", buildArgs, null, 600000);
+        if (buildSuccess)
+        {
+            return true;
+        }
+
+        ProjectResolverReporter.WriteBuildFailed(buildErr);
+        return false;
     }
 }
 

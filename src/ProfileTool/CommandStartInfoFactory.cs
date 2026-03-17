@@ -15,9 +15,21 @@ internal static class CommandStartInfoFactory
             throw new ArgumentException("Command is required.", nameof(command));
         }
 
+        return Create(command[0], command, workingDirectory, 1);
+    }
+
+    public static ProcessStartInfo Create(
+        string fileName,
+        IReadOnlyList<string> commandArguments,
+        string? workingDirectory = null,
+        int startIndex = 0)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentNullException.ThrowIfNull(commandArguments);
+
         var processStartInfo = new ProcessStartInfo
         {
-            FileName = command[0],
+            FileName = fileName,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -29,7 +41,7 @@ internal static class CommandStartInfoFactory
             processStartInfo.WorkingDirectory = workingDirectory;
         }
 
-        AddArguments(processStartInfo.ArgumentList, command);
+        AddArguments(processStartInfo.ArgumentList, commandArguments, startIndex);
         return processStartInfo;
     }
 
