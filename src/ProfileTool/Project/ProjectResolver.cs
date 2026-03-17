@@ -2,19 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
-using System.Text.RegularExpressions;
-using Spectre.Console;
-
 namespace Asynkron.Profiler;
 
-internal sealed partial class ProjectResolver
+internal sealed class ProjectResolver
 {
     private readonly Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> _runProcess;
+    private readonly MsbuildProjectMetadataReader _metadataReader;
 
     public ProjectResolver(Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> runProcess)
     {
         _runProcess = runProcess;
+        _metadataReader = new MsbuildProjectMetadataReader(runProcess);
     }
 
     public ResolvedCommand? Resolve(string[] command, string? targetFramework)
@@ -48,7 +46,7 @@ internal sealed partial class ProjectResolver
         var solutionDir = Path.GetDirectoryName(fullSolutionPath);
         if (solutionDir == null)
         {
-            AnsiConsole.MarkupLine($"[red]Invalid solution path:[/] {Markup.Escape(solutionPath)}");
+            ProjectResolverReporter.WriteInvalidSolutionPath(solutionPath);
             return null;
         }
 
@@ -56,26 +54,22 @@ internal sealed partial class ProjectResolver
         var (buildSuccess, _, buildErr) = _runProcess("dotnet", buildArgs, null, 600000);
         if (!buildSuccess)
         {
-            AnsiConsole.MarkupLine($"[red]Build failed:[/] {Markup.Escape(buildErr)}");
+            ProjectResolverReporter.WriteBuildFailed(buildErr);
             return null;
         }
 
-        var projectPaths = GetSolutionProjects(fullSolutionPath)
-            .Select(path => Path.GetFullPath(Path.Combine(solutionDir, path)))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
+        var projectPaths = SolutionProjectLocator.GetProjectPaths(fullSolutionPath);
         if (projectPaths.Count == 0)
         {
-            AnsiConsole.MarkupLine($"[red]No projects found in solution:[/] {Markup.Escape(solutionPath)}");
+            ProjectResolverReporter.WriteNoProjectsInSolution(solutionPath);
             return null;
         }
 
         var exeProjects = new List<string>();
         foreach (var projectPath in projectPaths)
         {
-            var outputType = GetProjectOutputType(projectPath, targetFramework);
-            if (outputType is "Exe" or "WinExe")
+            var metadata = _metadataReader.Read(projectPath, targetFramework);
+            if (metadata?.OutputType is "Exe" or "WinExe")
             {
                 exeProjects.Add(projectPath);
             }
@@ -86,35 +80,8 @@ internal sealed partial class ProjectResolver
             return ResolveProjectCommand(exeProjects[0], targetFramework, buildProject: false);
         }
 
-        if (exeProjects.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[red]No executable projects found in solution.[/]");
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("[red]Multiple executable projects found in solution.[/]");
-        }
-
-        foreach (var project in exeProjects)
-        {
-            AnsiConsole.MarkupLine($"[dim]- {Markup.Escape(project)}[/]");
-        }
-
-        AnsiConsole.MarkupLine("[dim]Pass a .csproj path directly to profile a specific project.[/]");
+        ProjectResolverReporter.WriteExecutableProjectsNotResolved(exeProjects);
         return null;
-    }
-
-    private string? GetProjectOutputType(string projectPath, string? targetFramework)
-    {
-        var props = GetMsbuildProperties(projectPath, targetFramework);
-        if (props == null)
-        {
-            return null;
-        }
-
-        return props.TryGetValue("OutputType", out var outputType)
-            ? outputType
-            : null;
     }
 
     private ResolvedCommand? ResolveProjectCommand(string projectPath, string? targetFramework, bool buildProject)
@@ -122,7 +89,7 @@ internal sealed partial class ProjectResolver
         var fullProjectPath = Path.GetFullPath(projectPath);
         if (!File.Exists(fullProjectPath))
         {
-            AnsiConsole.MarkupLine($"[red]Project not found:[/] {Markup.Escape(projectPath)}");
+            ProjectResolverReporter.WriteProjectNotFound(projectPath);
             return null;
         }
 
@@ -132,190 +99,45 @@ internal sealed partial class ProjectResolver
             var (buildSuccess, _, buildErr) = _runProcess("dotnet", buildArgs, null, 600000);
             if (!buildSuccess)
             {
-                AnsiConsole.MarkupLine($"[red]Build failed:[/] {Markup.Escape(buildErr)}");
+                ProjectResolverReporter.WriteBuildFailed(buildErr);
                 return null;
             }
         }
 
-        var initialProps = GetMsbuildProperties(fullProjectPath, targetFramework);
-        if (initialProps == null)
+        var initialMetadata = _metadataReader.Read(fullProjectPath, targetFramework);
+        if (initialMetadata == null)
         {
             return null;
         }
 
-        var outputType = initialProps.TryGetValue("OutputType", out var outputTypeValue)
-            ? outputTypeValue
-            : string.Empty;
-
-        if (outputType is not ("Exe" or "WinExe"))
+        if (initialMetadata.OutputType is not ("Exe" or "WinExe"))
         {
-            AnsiConsole.MarkupLine($"[red]Project is not executable:[/] {Markup.Escape(fullProjectPath)}");
+            ProjectResolverReporter.WriteProjectNotExecutable(fullProjectPath);
             return null;
         }
 
-        var tfm = ResolveTargetFramework(initialProps, targetFramework, fullProjectPath);
+        var tfm = ProjectLaunchResolver.ResolveTargetFramework(initialMetadata, targetFramework, fullProjectPath);
         if (string.IsNullOrWhiteSpace(tfm))
         {
             return null;
         }
 
-        var finalProps = GetMsbuildProperties(fullProjectPath, tfm);
-        if (finalProps == null)
+        var finalMetadata = _metadataReader.Read(fullProjectPath, tfm);
+        if (finalMetadata == null)
         {
             return null;
         }
 
-        if (!finalProps.TryGetValue("TargetPath", out var targetPath) || string.IsNullOrWhiteSpace(targetPath))
+        if (string.IsNullOrWhiteSpace(finalMetadata.TargetPath))
         {
-            AnsiConsole.MarkupLine($"[red]Could not determine output path for:[/] {Markup.Escape(fullProjectPath)}");
+            ProjectResolverReporter.WriteTargetPathNotFound(fullProjectPath);
             return null;
         }
 
-        var command = ResolveTargetCommand(targetPath);
+        var command = ProjectLaunchResolver.ResolveTargetCommand(finalMetadata.TargetPath);
         var label = Path.GetFileNameWithoutExtension(fullProjectPath);
         var description = $"{fullProjectPath} (Release, {tfm})";
         return new ResolvedCommand(command, label, description);
-    }
-
-    private Dictionary<string, string>? GetMsbuildProperties(string projectPath, string? targetFramework)
-    {
-        var args = new List<string>
-        {
-            "msbuild",
-            projectPath,
-            "-nologo",
-            "-getProperty:TargetFramework",
-            "-getProperty:TargetFrameworks",
-            "-getProperty:OutputType",
-            "-getProperty:TargetPath",
-            "-property:Configuration=Release"
-        };
-
-        if (!string.IsNullOrWhiteSpace(targetFramework))
-        {
-            args.Add($"-property:TargetFramework={targetFramework}");
-        }
-
-        var (success, stdout, stderr) = _runProcess("dotnet", args, null, 600000);
-        if (!success)
-        {
-            AnsiConsole.MarkupLine($"[red]Failed to query project metadata:[/] {Markup.Escape(stderr)}");
-            return null;
-        }
-
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var trimmed = stdout.TrimStart();
-        if (trimmed.StartsWith('{'))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(stdout);
-                if (doc.RootElement.TryGetProperty("Properties", out var props))
-                {
-                    foreach (var property in props.EnumerateObject())
-                    {
-                        var value = property.Value.GetString();
-                        if (!string.IsNullOrWhiteSpace(property.Name))
-                        {
-                            result[property.Name] = value ?? string.Empty;
-                        }
-                    }
-
-                    return result;
-                }
-            }
-            catch
-            {
-                // Fall back to line parsing if JSON parsing fails.
-            }
-        }
-
-        using var reader = new StringReader(stdout);
-        string? line;
-        while ((line = reader.ReadLine()) != null)
-        {
-            var index = line.IndexOf('=');
-            if (index <= 0)
-            {
-                continue;
-            }
-
-            var key = line[..index].Trim();
-            var value = line[(index + 1)..].Trim();
-            if (!string.IsNullOrWhiteSpace(key))
-            {
-                result[key] = value;
-            }
-        }
-
-        return result;
-    }
-
-    private static string? ResolveTargetFramework(
-        Dictionary<string, string> props,
-        string? targetFramework,
-        string projectPath)
-    {
-        if (!string.IsNullOrWhiteSpace(targetFramework))
-        {
-            return targetFramework;
-        }
-
-        if (props.TryGetValue("TargetFrameworks", out var frameworksValue) &&
-            !string.IsNullOrWhiteSpace(frameworksValue))
-        {
-            var frameworks = frameworksValue
-                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToList();
-
-            if (frameworks.Count == 1)
-            {
-                return frameworks[0];
-            }
-
-            AnsiConsole.MarkupLine($"[red]Multiple target frameworks found for:[/] {Markup.Escape(projectPath)}");
-            AnsiConsole.MarkupLine($"[dim]Use --tfm <tfm> to select one: {Markup.Escape(frameworksValue)}[/]");
-            return null;
-        }
-
-        return props.TryGetValue("TargetFramework", out var singleFramework)
-            ? singleFramework
-            : null;
-    }
-
-    private static string[] ResolveTargetCommand(string targetPath)
-    {
-        if (targetPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-        {
-            return new[] { "dotnet", targetPath };
-        }
-
-        return new[] { targetPath };
-    }
-
-    private static IEnumerable<string> GetSolutionProjects(string solutionPath)
-    {
-        var projectPattern = MyRegex();
-        foreach (var line in File.ReadLines(solutionPath))
-        {
-            var match = projectPattern.Match(line);
-            if (match.Success)
-            {
-                yield return NormalizeSolutionPath(match.Groups[1].Value);
-            }
-        }
-    }
-
-    private static string NormalizeSolutionPath(string solutionPath)
-    {
-        if (string.IsNullOrWhiteSpace(solutionPath))
-        {
-            return solutionPath;
-        }
-
-        return solutionPath
-            .Replace('\\', Path.DirectorySeparatorChar)
-            .Replace('/', Path.DirectorySeparatorChar);
     }
 
     private static string BuildCommandLabel(string[] command)
@@ -332,9 +154,6 @@ internal sealed partial class ProjectResolver
     {
         return command.Length == 0 ? string.Empty : string.Join(' ', command);
     }
-
-    [GeneratedRegex("Project\\([^)]*\\)\\s*=\\s*\"[^\"]+\",\\s*\"([^\"]+\\.csproj)\"", RegexOptions.IgnoreCase, "sv-SE")]
-    private static partial Regex MyRegex();
 }
 
 internal sealed record ResolvedCommand(string[] Command, string Label, string Description);

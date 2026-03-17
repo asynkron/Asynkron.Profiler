@@ -62,7 +62,7 @@ internal sealed class CpuProfileConsoleRenderer
         RenderCallTree(results, request, countSuffix, timeUnitLabel, allocationTypeLimit, exceptionTypeLimit);
     }
 
-    private IEnumerable<FunctionSample> FilterFunctions(
+    private static IEnumerable<FunctionSample> FilterFunctions(
         IReadOnlyList<FunctionSample> allFunctions,
         ProfileRenderRequest request)
     {
@@ -126,7 +126,7 @@ internal sealed class CpuProfileConsoleRenderer
         AnsiConsole.Write(grid);
     }
 
-    private void WriteFilterSummary(int totalFunctions, int filteredCount, string? functionFilter)
+    private static void WriteFilterSummary(int totalFunctions, int filteredCount, string? functionFilter)
     {
         var filteredOut = totalFunctions - filteredCount;
         if (filteredOut > 0)

@@ -78,7 +78,7 @@ internal sealed class ContentionProfileConsoleRenderer
             rows);
     }
 
-    private void WriteFilterSummary(int totalFunctions, int filteredCount, string? functionFilter)
+    private static void WriteFilterSummary(int totalFunctions, int filteredCount, string? functionFilter)
     {
         var filteredOut = totalFunctions - filteredCount;
         if (filteredOut > 0)
