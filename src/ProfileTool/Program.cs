@@ -544,5 +544,3 @@ var parser = new CommandLineBuilder(rootCommand)
     .Build();
 
 return await parser.InvokeAsync(args);
-
-record TableColumnSpec(string Header, bool RightAligned = false);
