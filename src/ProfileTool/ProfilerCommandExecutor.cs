@@ -13,8 +13,7 @@ internal sealed class ProfilerCommandExecutor
     private readonly ProfilerToolAvailability _toolAvailability;
 
     private HotJitDisasmRunner _hotJitDisasmRunner = null!;
-    private JitCommandRunner _jitCommandRunner = null!;
-    private JitOutputFormatter _jitOutputFormatter = null!;
+    private ProfilerJitModeRunner _jitModeRunner = null!;
     private ProfilerConsoleRenderer _renderer = null!;
     private Theme _theme;
 
@@ -61,12 +60,12 @@ internal sealed class ProfilerCommandExecutor
             return;
         }
 
-        if (TryHandleJitDumpModes(request))
+        if (_jitModeRunner.TryHandleDumpModes(request))
         {
             return;
         }
 
-        if (!ValidateHotJitRequest(request))
+        if (!_jitModeRunner.ValidateHotJitRequest(request))
         {
             return;
         }
@@ -199,86 +198,6 @@ internal sealed class ProfilerCommandExecutor
             : _collectionRunner.RunHeapProfile(request.Command, request.Label);
     }
 
-    private bool TryHandleJitDumpModes(ProfilerExecutionRequest request)
-    {
-        if (!request.JitInline && !request.JitDisasm)
-        {
-            return false;
-        }
-
-        if (request.HasInput)
-        {
-            AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]JIT dump modes require a command, not --input.[/]");
-            return true;
-        }
-
-        if (request.HasExplicitModes)
-        {
-            AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]JIT dump modes cannot be combined with other profiling modes.[/]");
-            return true;
-        }
-
-        if (string.IsNullOrWhiteSpace(request.JitMethod))
-        {
-            AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]Missing --jit-method (e.g. Namespace.Type:Method).[/]");
-            return true;
-        }
-
-        if (request.JitInline && request.JitDisasm)
-        {
-            AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]Choose either --jit-inline or --jit-disasm, not both.[/]");
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.JitAltJitPath) && !File.Exists(request.JitAltJitPath))
-        {
-            AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]AltJit path not found:[/] {Markup.Escape(request.JitAltJitPath)}");
-            return true;
-        }
-
-        var dumpFiles = request.JitInline
-            ? _jitCommandRunner.RunInlineDump(request.Command, request.JitMethod!, request.JitAltJitPath, request.JitAltJitName)
-            : _jitCommandRunner.RunDisasm(request.Command, request.JitMethod!);
-        WriteOutputFiles(request.JitInline ? "JIT inline dump files" : "JIT disasm files", dumpFiles);
-
-        var logPath = JitCommandRunner.GetPrimaryLogPath(dumpFiles);
-        if (!string.IsNullOrWhiteSpace(logPath))
-        {
-            if (request.JitInline)
-            {
-                _jitOutputFormatter.PrintInlineSummary(logPath);
-            }
-            else
-            {
-                _jitOutputFormatter.PrintDisasmSummary(logPath);
-            }
-        }
-
-        return true;
-    }
-
-    private bool ValidateHotJitRequest(ProfilerExecutionRequest request)
-    {
-        if (!request.HasHotJitRequest)
-        {
-            return true;
-        }
-
-        if (request.HasInput)
-        {
-            AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]Hot JIT disasm requires a command, not --input.[/]");
-            return false;
-        }
-
-        if (request.JitInline || request.JitDisasm)
-        {
-            AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]Hot JIT disasm cannot be combined with JIT dump modes.[/]");
-            return false;
-        }
-
-        return true;
-    }
-
     private string? CollectSharedTraceFile(ProfilerExecutionRequest request)
     {
         if (request.HasInput || !request.RunCpu || (!request.RunMemory && !request.RunException))
@@ -308,9 +227,11 @@ internal sealed class ProfilerCommandExecutor
     private void RefreshThemeServices()
     {
         _renderer = new ProfilerConsoleRenderer(_theme);
-        _jitOutputFormatter = new JitOutputFormatter(_theme);
-        _jitCommandRunner = new JitCommandRunner(_theme, _outputDirectory, _jitOutputFormatter);
-        _hotJitDisasmRunner = new HotJitDisasmRunner(_theme, _jitCommandRunner, _jitOutputFormatter, WriteOutputFiles);
+        var jitOutputFormatter = new JitOutputFormatter(_theme);
+        var jitCommandRunner = new JitCommandRunner(_theme, _outputDirectory, jitOutputFormatter);
+        var jitContext = new JitExecutionContext(_theme, jitCommandRunner, jitOutputFormatter, WriteOutputFiles);
+        _jitModeRunner = new ProfilerJitModeRunner(jitContext);
+        _hotJitDisasmRunner = new HotJitDisasmRunner(jitContext);
     }
 
     private void WriteOutputFiles(string label, IEnumerable<string> files)

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Globalization;
 using Spectre.Console;
 using static Asynkron.Profiler.CallTreeHelpers;
@@ -7,21 +6,11 @@ namespace Asynkron.Profiler;
 
 internal sealed class HotJitDisasmRunner
 {
-    private readonly Theme _theme;
-    private readonly JitCommandRunner _jitCommandRunner;
-    private readonly JitOutputFormatter _jitOutputFormatter;
-    private readonly Action<string, IEnumerable<string>> _writeOutputFiles;
+    private readonly JitExecutionContext _jit;
 
-    public HotJitDisasmRunner(
-        Theme theme,
-        JitCommandRunner jitCommandRunner,
-        JitOutputFormatter jitOutputFormatter,
-        Action<string, IEnumerable<string>> writeOutputFiles)
+    public HotJitDisasmRunner(JitExecutionContext jit)
     {
-        _theme = theme;
-        _jitCommandRunner = jitCommandRunner;
-        _jitOutputFormatter = jitOutputFormatter;
-        _writeOutputFiles = writeOutputFiles;
+        _jit = jit;
     }
 
     public void Run(ProfilerExecutionRequest request, CpuProfileResult results)
@@ -49,10 +38,10 @@ internal sealed class HotJitDisasmRunner
             totalSamples,
             request.RenderRequest.IncludeRuntime,
             request.RenderRequest.HotThreshold);
-        ConsoleThemeHelpers.PrintSection(title, _theme.AccentColor);
+        ConsoleThemeHelpers.PrintSection(title, _jit.Theme.AccentColor);
         if (hotMethods.Count == 0)
         {
-            AnsiConsole.MarkupLine($"[{_theme.AccentColor}]No hot methods found.[/]");
+            AnsiConsole.MarkupLine($"[{_jit.Theme.AccentColor}]No hot methods found.[/]");
             return;
         }
 
@@ -60,22 +49,22 @@ internal sealed class HotJitDisasmRunner
         foreach (var method in hotMethods)
         {
             AnsiConsole.MarkupLine(
-                $"[{_theme.AccentColor}]Disassembling ({index}/{hotMethods.Count}):[/] {Markup.Escape(method.DisplayName)}");
+                $"[{_jit.Theme.AccentColor}]Disassembling ({index}/{hotMethods.Count}):[/] {Markup.Escape(method.DisplayName)}");
 
-            var dumpFiles = _jitCommandRunner.RunDisasm(request.Command, method.Filter, suppressNoMarkersWarning: true);
+            var dumpFiles = _jit.CommandRunner.RunDisasm(request.Command, method.Filter, suppressNoMarkersWarning: true);
             var logPath = JitCommandRunner.GetPrimaryLogPath(dumpFiles);
             var hasMarkers = JitCommandRunner.HasDisasmMarkers(logPath ?? string.Empty);
 
             if (!hasMarkers)
             {
-                AnsiConsole.MarkupLine($"[{_theme.ErrorColor}]No JIT disassembly markers found. Check the method filter.[/]");
+                AnsiConsole.MarkupLine($"[{_jit.Theme.ErrorColor}]No JIT disassembly markers found. Check the method filter.[/]");
             }
 
-            _writeOutputFiles("JIT disasm files", dumpFiles);
+            _jit.WriteOutputFiles("JIT disasm files", dumpFiles);
 
             if (hasMarkers && !string.IsNullOrWhiteSpace(logPath))
             {
-                _jitOutputFormatter.PrintDisasmSummary(logPath);
+                _jit.OutputFormatter.PrintDisasmSummary(logPath);
             }
 
             index++;
