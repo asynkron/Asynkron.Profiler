@@ -28,12 +28,7 @@ internal sealed class ProfileCollectionRunner
         ProfileInputLoader profileInputLoader,
         Action<string> writeLine)
     {
-        if (string.IsNullOrWhiteSpace(outputDirectory))
-        {
-            throw new ArgumentException("Output directory is required.", nameof(outputDirectory));
-        }
-
-        _outputDirectory = outputDirectory;
+        _outputDirectory = ArgumentGuard.RequireNotWhiteSpace(outputDirectory, nameof(outputDirectory), "Output directory is required.");
         _getTheme = getTheme;
         _ensureToolAvailable = ensureToolAvailable;
         _runProcess = runProcess;

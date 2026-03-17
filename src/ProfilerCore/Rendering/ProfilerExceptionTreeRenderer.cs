@@ -97,11 +97,12 @@ internal sealed class ProfilerExceptionTreeRenderer
         bool includeRuntime,
         CallTreeTraversalSettings traversal)
     {
-        return CallTreeVisibility.GetVisibleChildren(
+        return CallTreeFilters.GetVisibleChildren(
             node,
             includeRuntime,
             useSelfTime: false,
             traversal.MaxWidth,
-            traversal.SiblingCutoffPercent);
+            traversal.SiblingCutoffPercent,
+            CallTreeHelpers.IsRuntimeNoise);
     }
 }
