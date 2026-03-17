@@ -50,25 +50,22 @@ internal sealed class ProfilerCallTreeRenderer
         var totalTime = results.CallTreeTotal;
         var totalSamples = callTreeRoot.Calls;
         var traversal = CallTreeTraversalSettings.Create(maxDepth, maxWidth, siblingCutoffPercent);
-        var rootSelection = _rootResolver.Resolve(
+        var (rootSelection, context) = CreateRenderContext(
             callTreeRoot,
             totalTime,
+            totalSamples,
             useSelfTime ? "Call Tree (Self Time)" : "Call Tree (Total Time)",
             rootFilter,
             includeRuntime,
-            rootMode);
-        var context = new ProfilerCallTreeRenderContext(
-            rootSelection.RootTotal,
-            totalSamples,
+            rootMode,
             useSelfTime,
-            includeRuntime,
             traversal,
             timeUnitLabel,
             countSuffix,
             allocationTypeLimit,
             exceptionTypeLimit,
             hotThreshold,
-            HighlightHotspots: true);
+            highlightHotspots: true);
 
         if (showTimeline && rootSelection.RootNode.HasTiming)
         {
@@ -122,25 +119,22 @@ internal sealed class ProfilerCallTreeRenderer
         var totalTime = results.TotalWaitMs;
         var totalSamples = callTreeRoot.Calls;
         var traversal = CallTreeTraversalSettings.Create(maxDepth, maxWidth, siblingCutoffPercent);
-        var rootSelection = _rootResolver.Resolve(
+        var (rootSelection, context) = CreateRenderContext(
             callTreeRoot,
             totalTime,
+            totalSamples,
             "Call Tree (Wait Time)",
             rootFilter,
             includeRuntime,
-            rootMode);
-        var context = new ProfilerCallTreeRenderContext(
-            rootSelection.RootTotal,
-            totalSamples,
-            false,
-            includeRuntime,
+            rootMode,
+            useSelfTime: false,
             traversal,
             "ms",
             "x",
-            0,
-            0,
-            DefaultHotThreshold,
-            false);
+            allocationTypeLimit: 0,
+            exceptionTypeLimit: 0,
+            hotThreshold: DefaultHotThreshold,
+            highlightHotspots: false);
 
         return BuildStandardTreeRows(rootSelection.RootNode, rootSelection.Title, context);
     }
@@ -156,6 +150,47 @@ internal sealed class ProfilerCallTreeRenderer
     }
 
     public string HighlightJitNumbers(string text) => _formatter.HighlightJitNumbers(text);
+
+    private (ProfilerCallTreeRootSelection RootSelection, ProfilerCallTreeRenderContext Context) CreateRenderContext(
+        CallTreeNode callTreeRoot,
+        double totalTime,
+        int totalSamples,
+        string title,
+        string? rootFilter,
+        bool includeRuntime,
+        string? rootMode,
+        bool useSelfTime,
+        CallTreeTraversalSettings traversal,
+        string timeUnitLabel,
+        string countSuffix,
+        int allocationTypeLimit,
+        int exceptionTypeLimit,
+        double hotThreshold,
+        bool highlightHotspots)
+    {
+        var rootSelection = _rootResolver.Resolve(
+            callTreeRoot,
+            totalTime,
+            title,
+            rootFilter,
+            includeRuntime,
+            rootMode);
+
+        var context = new ProfilerCallTreeRenderContext(
+            rootSelection.RootTotal,
+            totalSamples,
+            useSelfTime,
+            includeRuntime,
+            traversal,
+            timeUnitLabel,
+            countSuffix,
+            allocationTypeLimit,
+            exceptionTypeLimit,
+            hotThreshold,
+            highlightHotspots);
+
+        return (rootSelection, context);
+    }
 
     private Rows BuildStandardTreeRows(
         CallTreeNode rootNode,

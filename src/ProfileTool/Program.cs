@@ -2,23 +2,36 @@ using System.CommandLine;
 using System.CommandLine.Builder;
 using System.CommandLine.Help;
 using System.CommandLine.Parsing;
-using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
-using System.Threading;
-using static Asynkron.Profiler.CallTreeHelpers;
 using Asynkron.Profiler;
-using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
+using static Asynkron.Profiler.CallTreeHelpers;
 
 const double HotnessFireThreshold = 0.4d;
-var versionProbeArgs = new[] { "--version" };
 var theme = Theme.Current;
 var outputDir = Path.Combine(Environment.CurrentDirectory, "profile-output");
 Directory.CreateDirectory(outputDir);
 var renderer = new ProfilerConsoleRenderer(theme);
 var jitOutputFormatter = new JitOutputFormatter(theme);
 var jitCommandRunner = new JitCommandRunner(theme, outputDir, jitOutputFormatter);
+var toolAvailability = new ProfilerToolAvailability(() => theme, ProcessRunner.Run, AnsiConsole.MarkupLine);
+var traceAnalyzer = new ProfilerTraceAnalyzer(outputDir);
+var profileInputLoader = new ProfileInputLoader(
+    traceAnalyzer,
+    () => theme,
+    toolAvailability.EnsureAvailable,
+    ProcessRunner.Run,
+    GcdumpReportParser.Parse,
+    AnsiConsole.MarkupLine,
+    ProfileCollectionRunner.DotnetGcdumpInstallHint);
+var collectionRunner = new ProfileCollectionRunner(
+    outputDir,
+    () => theme,
+    toolAvailability.EnsureAvailable,
+    ProcessRunner.Run,
+    profileInputLoader,
+    AnsiConsole.MarkupLine);
 
 bool TryApplyTheme(string? themeName)
 {
@@ -38,100 +51,6 @@ bool TryApplyTheme(string? themeName)
     return true;
 }
 
-
-IReadOnlyList<string> GetUsageExampleLines()
-{
-    return new[]
-    {
-        "Examples:",
-        "",
-        "CPU profiling:",
-        "  asynkron-profiler --cpu -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --cpu --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --cpu --calltree-depth 5 -- ./MyApp.csproj",
-        "  asynkron-profiler --cpu --calltree-depth 5 -- ./MySolution.sln",
-        "  asynkron-profiler --cpu --input ./profile-output/app.speedscope.json",
-        "  asynkron-profiler --cpu --timeline -- ./bin/Release/<tfm>/MyApp",
-        "",
-        "Memory profiling:",
-        "  asynkron-profiler --memory -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --memory --root \"MyNamespace\" -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --memory --input ./profile-output/app.nettrace",
-        "",
-        "Exception profiling:",
-        "  asynkron-profiler --exception -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --exception --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --exception --exception-type \"InvalidOperation\" -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --exception --input ./profile-output/app.nettrace",
-        "",
-        "Lock contention profiling:",
-        "  asynkron-profiler --contention -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --contention --calltree-depth 5 -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --contention --input ./profile-output/app.nettrace",
-        "",
-        "Heap snapshot:",
-        "  asynkron-profiler --heap -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --heap --input ./profile-output/app.gcdump",
-        "",
-        "JIT inlining dumps:",
-        "  asynkron-profiler --jit-inline --jit-method \"Namespace.Type:Method\" -- ./bin/Release/<tfm>/MyApp",
-        "  asynkron-profiler --jit-inline --jit-method \"Namespace.Type:Method\" --jit-altjit-path /path/to/libclrjit.dylib -- ./bin/Release/<tfm>/MyApp",
-        "JIT disassembly:",
-        "  asynkron-profiler --jit-disasm --jit-method \"Namespace.Type:Method\" -- ./bin/Release/<tfm>/MyApp",
-        "",
-        "Render existing traces:",
-        "  asynkron-profiler --input ./profile-output/app.nettrace",
-        "  asynkron-profiler --input ./profile-output/app.speedscope.json --cpu",
-        "  asynkron-profiler --input ./profile-output/app.etlx --memory",
-        "  asynkron-profiler --input ./profile-output/app.nettrace --exception",
-        "",
-        "General:",
-        "  asynkron-profiler --help",
-        "",
-        "Themes:",
-        "  asynkron-profiler --theme onedark --cpu -- ./bin/Release/<tfm>/MyApp",
-        $"  Available: {Theme.AvailableThemes}"
-    };
-}
-
-void WriteUsageExamples(TextWriter writer)
-{
-    foreach (var line in GetUsageExampleLines())
-    {
-        writer.WriteLine(line);
-    }
-}
-
-int GetHelpWidth()
-{
-    if (Console.IsOutputRedirected)
-    {
-        return 200;
-    }
-
-    try
-    {
-        return Math.Max(80, Console.WindowWidth);
-    }
-    catch
-    {
-        return 120;
-    }
-}
-
-var traceAnalyzer = new ProfilerTraceAnalyzer(outputDir);
-var toolAvailability = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-const string DotnetTraceInstall = "dotnet tool install -g dotnet-trace";
-const string DotnetGcdumpInstall = "dotnet tool install -g dotnet-gcdump";
-var profileInputLoader = new ProfileInputLoader(
-    traceAnalyzer,
-    () => theme,
-    EnsureToolAvailable,
-    ProcessRunner.Run,
-    ParseGcdumpReport,
-    AnsiConsole.MarkupLine,
-    DotnetGcdumpInstall);
-
 if (Console.IsOutputRedirected)
 {
     var capabilities = AnsiConsole.Profile.Capabilities;
@@ -141,176 +60,6 @@ if (Console.IsOutputRedirected)
     capabilities.Interactive = false;
     AnsiConsole.Profile.Capabilities = capabilities;
     AnsiConsole.Profile.Width = 200;
-}
-
-bool EnsureToolAvailable(string toolName, string installHint)
-{
-    if (toolAvailability.TryGetValue(toolName, out var cached))
-    {
-        return cached;
-    }
-
-    var (success, _, stderr) = ProcessRunner.Run(toolName, versionProbeArgs, timeoutMs: 10000);
-    if (!success)
-    {
-        var detail = string.IsNullOrWhiteSpace(stderr) ? "Tool not found." : stderr.Trim();
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{toolName} unavailable:[/] {Markup.Escape(detail)}");
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]Install:[/] {Markup.Escape(installHint)}");
-        toolAvailability[toolName] = false;
-        return false;
-    }
-
-    toolAvailability[toolName] = true;
-    return true;
-}
-
-string BuildExceptionProvider()
-{
-    var keywordsValue = ClrTraceEventParser.Keywords.Exception;
-    var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
-    return $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
-}
-
-TResult? CollectTraceAndAnalyze<TResult>(
-    string[] command,
-    string label,
-    string traceSuffix,
-    string startMessage,
-    string failureLabel,
-    string analysisStatus,
-    Action<List<string>> configureCollectArgs,
-    Func<string, TResult?> analyzeTrace)
-{
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
-    {
-        return default;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.{traceSuffix}");
-
-    return AnsiConsole.Status()
-        .Spinner(Spinner.Known.Dots)
-        .Start(startMessage, ctx =>
-        {
-            ctx.Status("Collecting trace data...");
-            var collectArgs = new List<string> { "collect" };
-            configureCollectArgs(collectArgs);
-            collectArgs.Add("--output");
-            collectArgs.Add(traceFile);
-            collectArgs.Add("--");
-            collectArgs.AddRange(command);
-
-            var (success, _, stderr) = ProcessRunner.Run("dotnet-trace", collectArgs, timeoutMs: 180000);
-            if (!success || !File.Exists(traceFile))
-            {
-                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]{failureLabel}:[/] {Markup.Escape(stderr)}");
-                return default;
-            }
-
-            ctx.Status(analysisStatus);
-            return analyzeTrace(traceFile);
-        });
-}
-
-string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool includeException)
-{
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
-    {
-        return null;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.nettrace");
-    var traceParts = new List<string> { "CPU" };
-    if (includeMemory)
-    {
-        traceParts.Add("allocation");
-    }
-
-    if (includeException)
-    {
-        traceParts.Add("exception");
-    }
-
-    var traceLabel = string.Join(" + ", traceParts);
-
-    return AnsiConsole.Status()
-        .Spinner(Spinner.Known.Dots)
-        .Start($"Collecting {traceLabel} trace for [{theme.AccentColor}]{label}[/]...", ctx =>
-        {
-            ctx.Status("Collecting trace data...");
-            var collectArgs = new List<string> { "collect" };
-            if (includeMemory)
-            {
-                collectArgs.Add("--profile");
-                collectArgs.Add("gc-verbose");
-            }
-
-            var providers = new List<string> { "Microsoft-DotNETCore-SampleProfiler" };
-            if (includeException)
-            {
-                providers.Add(BuildExceptionProvider());
-            }
-
-            if (providers.Count > 0)
-            {
-                collectArgs.Add("--providers");
-                collectArgs.Add(string.Join(",", providers));
-            }
-
-            collectArgs.Add("--output");
-            collectArgs.Add(traceFile);
-            collectArgs.Add("--");
-            collectArgs.AddRange(command);
-            var (success, _, stderr) = ProcessRunner.Run("dotnet-trace", collectArgs, timeoutMs: 180000);
-
-            if (!success || !File.Exists(traceFile))
-            {
-                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Trace collection failed:[/] {Markup.Escape(stderr)}");
-                return null;
-            }
-
-            return traceFile;
-        });
-}
-
-CpuProfileResult? CpuProfileCommand(string[] command, string label)
-{
-    if (!EnsureToolAvailable("dotnet-trace", DotnetTraceInstall))
-    {
-        return null;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
-    var traceFile = Path.Combine(outputDir, $"{label}_{timestamp}.nettrace");
-
-    return AnsiConsole.Status()
-        .Spinner(Spinner.Known.Dots)
-        .Start($"Running CPU profile on [{theme.AccentColor}]{label}[/]...", ctx =>
-        {
-            ctx.Status("Collecting trace data...");
-            var collectArgs = new List<string>
-            {
-                "collect",
-                "--providers",
-                "Microsoft-DotNETCore-SampleProfiler",
-                "--output",
-                traceFile,
-                "--"
-            };
-            collectArgs.AddRange(command);
-            var (success, _, stderr) = ProcessRunner.Run("dotnet-trace", collectArgs, timeoutMs: 180000);
-
-            if (!success || !File.Exists(traceFile))
-            {
-                AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Trace collection failed:[/] {Markup.Escape(stderr)}");
-                return null;
-            }
-
-            ctx.Status("Analyzing profile data...");
-            return profileInputLoader.AnalyzeCpuTrace(traceFile);
-        });
 }
 
 void RunHotJitDisasm(
@@ -375,11 +124,7 @@ void RunHotJitDisasm(
             AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No JIT disassembly markers found. Check the method filter.[/]");
         }
 
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]JIT disasm files:[/]");
-        foreach (var file in dumpFiles)
-        {
-            Console.WriteLine(file);
-        }
+        WriteOutputFiles("JIT disasm files", dumpFiles);
 
         if (hasMarkers && !string.IsNullOrWhiteSpace(logPath))
         {
@@ -390,65 +135,13 @@ void RunHotJitDisasm(
     }
 }
 
-MemoryProfileResult? MemoryProfileCommand(string[] command, string label)
+void WriteOutputFiles(string label, IEnumerable<string> files)
 {
-    var callTree = CollectTraceAndAnalyze(
-        command,
-        label,
-        "alloc.nettrace",
-        $"Collecting allocation trace for [{theme.AccentColor}]{label}[/]...",
-        "Allocation trace failed",
-        "Analyzing allocation trace...",
-        collectArgs =>
-        {
-            collectArgs.Add("--profile");
-            collectArgs.Add("gc-verbose");
-        },
-        profileInputLoader.AnalyzeAllocationTrace);
-
-    if (callTree == null)
+    AnsiConsole.MarkupLine($"[{theme.AccentColor}]{label}:[/]");
+    foreach (var file in files)
     {
-        return null;
+        Console.WriteLine(file);
     }
-
-    return ProfileInputLoader.BuildMemoryProfileResult(callTree);
-}
-ExceptionProfileResult? ExceptionProfileCommand(string[] command, string label)
-{
-    var provider = BuildExceptionProvider();
-    return CollectTraceAndAnalyze(
-        command,
-        label,
-        "exc.nettrace",
-        $"Collecting exception trace for [{theme.AccentColor}]{label}[/]...",
-        "Exception trace failed",
-        "Analyzing exception trace...",
-        collectArgs =>
-        {
-            collectArgs.Add("--providers");
-            collectArgs.Add(provider);
-        },
-        profileInputLoader.AnalyzeExceptionTrace);
-}
-
-ContentionProfileResult? ContentionProfileCommand(string[] command, string label)
-{
-    var keywordsValue = ClrTraceEventParser.Keywords.Contention | ClrTraceEventParser.Keywords.Threading;
-    var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
-    var provider = $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
-    return CollectTraceAndAnalyze(
-        command,
-        label,
-        "cont.nettrace",
-        $"Collecting lock contention trace for [{theme.AccentColor}]{label}[/]...",
-        "Contention trace failed",
-        "Analyzing contention trace...",
-        collectArgs =>
-        {
-            collectArgs.Add("--providers");
-            collectArgs.Add(provider);
-        },
-        profileInputLoader.AnalyzeContentionTrace);
 }
 
 bool TryParseHotThreshold(string? input, out double value)
@@ -471,128 +164,6 @@ bool TryParseHotThreshold(string? input, out double value)
     }
 
     return false;
-}
-
-HeapProfileResult? HeapProfileCommand(string[] command, string label)
-{
-    if (!EnsureToolAvailable("dotnet-gcdump", DotnetGcdumpInstall))
-    {
-        return null;
-    }
-
-    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-    var gcdumpFile = Path.Combine(outputDir, $"{label}_{timestamp}.gcdump");
-
-    AnsiConsole.MarkupLine("[dim]Capturing heap snapshot...[/]");
-
-    if (command.Length == 0)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No command provided for heap snapshot.[/]");
-        return null;
-    }
-
-    var psi = new ProcessStartInfo
-    {
-        FileName = command[0],
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true
-    };
-
-    for (var i = 1; i < command.Length; i++)
-    {
-        psi.ArgumentList.Add(command[i]);
-    }
-
-    using var proc = Process.Start(psi);
-
-    if (proc == null)
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]Failed to start process for heap snapshot.[/]");
-        return null;
-    }
-
-    Thread.Sleep(500);
-
-    var (success, _, stderr) = ProcessRunner.Run(
-        "dotnet-gcdump",
-        new[]
-        {
-            "collect",
-            "-p",
-            proc.Id.ToString(CultureInfo.InvariantCulture),
-            "-o",
-            gcdumpFile
-        },
-        timeoutMs: 60000);
-
-    proc.WaitForExit();
-
-    if (!success || !File.Exists(gcdumpFile))
-    {
-        AnsiConsole.MarkupLine($"[{theme.ErrorColor}]GC dump collection failed:[/] {Markup.Escape(stderr)}");
-        return null;
-    }
-
-    return GcdumpReportLoader.Load(
-        gcdumpFile,
-        theme,
-        ProcessRunner.Run,
-        ParseGcdumpReport,
-        AnsiConsole.MarkupLine);
-}
-
-HeapProfileResult ParseGcdumpReport(string output)
-{
-    var types = new List<HeapTypeEntry>();
-    using var reader = new StringReader(output);
-    var inTable = false;
-
-    string? line;
-    while ((line = reader.ReadLine()) != null)
-    {
-        if (!inTable)
-        {
-            if (line.Contains("Size", StringComparison.Ordinal) &&
-                line.Contains("Count", StringComparison.Ordinal) &&
-                line.Contains("Type", StringComparison.Ordinal))
-            {
-                inTable = true;
-            }
-            continue;
-        }
-
-        if (string.IsNullOrWhiteSpace(line))
-        {
-            continue;
-        }
-
-        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length < 3)
-        {
-            continue;
-        }
-
-        if (!TryParseLong(parts[0], out var size) || !TryParseLong(parts[1], out var count))
-        {
-            continue;
-        }
-
-        var typeName = string.Join(' ', parts.Skip(2));
-        types.Add(new HeapTypeEntry(size, count, typeName));
-    }
-
-    return new HeapProfileResult(output, types);
-}
-
-bool TryParseLong(string input, out long value)
-{
-    return long.TryParse(
-        input.Replace(",", "", StringComparison.Ordinal),
-        NumberStyles.Integer,
-        CultureInfo.InvariantCulture,
-        out value);
 }
 
 // Command-line setup
@@ -739,7 +310,7 @@ rootCommand.SetHandler(context =>
         if (command.Length == 0)
         {
             AnsiConsole.MarkupLine($"[{theme.ErrorColor}]No command provided.[/]");
-            WriteUsageExamples(Console.Out);
+            ProfilerCommandLineHelp.WriteUsageExamples(Console.Out);
             return;
         }
 
@@ -829,12 +400,7 @@ rootCommand.SetHandler(context =>
         var dumpFiles = jitInline
             ? jitCommandRunner.RunInlineDump(command, jitMethod!, jitAltJitPath, jitAltJitName)
             : jitCommandRunner.RunDisasm(command, jitMethod!);
-        var labelText = jitInline ? "JIT inline dump files" : "JIT disasm files";
-        AnsiConsole.MarkupLine($"[{theme.AccentColor}]{labelText}:[/]");
-        foreach (var file in dumpFiles)
-        {
-            Console.WriteLine(file);
-        }
+        WriteOutputFiles(jitInline ? "JIT inline dump files" : "JIT disasm files", dumpFiles);
 
         var logPath = JitCommandRunner.GetPrimaryLogPath(dumpFiles);
         if (!string.IsNullOrWhiteSpace(logPath))
@@ -870,7 +436,7 @@ rootCommand.SetHandler(context =>
     string? sharedTraceFile = null;
     if (!hasInput && runCpu && (runMemory || runException))
     {
-        sharedTraceFile = CollectCpuTrace(command, label, runMemory, runException);
+        sharedTraceFile = collectionRunner.CollectCpuTrace(command, label, runMemory, runException);
         if (sharedTraceFile == null)
         {
             return;
@@ -884,12 +450,12 @@ rootCommand.SetHandler(context =>
             ? profileInputLoader.LoadCpu(inputPath!)
             : sharedTraceFile != null
                 ? profileInputLoader.AnalyzeCpuTrace(sharedTraceFile)
-                : CpuProfileCommand(command, label);
+                : collectionRunner.RunCpuProfile(command, label);
         var memoryResults = hasInput
             ? profileInputLoader.LoadMemory(inputPath!)
             : sharedTraceFile != null
                 ? profileInputLoader.LoadMemory(sharedTraceFile)
-                : MemoryProfileCommand(command, label);
+                : collectionRunner.RunMemoryProfile(command, label);
 
         if (cpuResults != null)
         {
@@ -909,7 +475,7 @@ rootCommand.SetHandler(context =>
                 ? profileInputLoader.LoadCpu(inputPath!)
                 : sharedTraceFile != null
                     ? profileInputLoader.AnalyzeCpuTrace(sharedTraceFile)
-                    : CpuProfileCommand(command, label);
+                    : collectionRunner.RunCpuProfile(command, label);
             RenderCpuResults(results);
         }
 
@@ -920,7 +486,7 @@ rootCommand.SetHandler(context =>
                 ? profileInputLoader.LoadMemory(inputPath!)
                 : sharedTraceFile != null
                     ? profileInputLoader.LoadMemory(sharedTraceFile)
-                    : MemoryProfileCommand(command, label);
+                    : collectionRunner.RunMemoryProfile(command, label);
             RenderMemoryResults(results);
         }
     }
@@ -932,7 +498,7 @@ rootCommand.SetHandler(context =>
             ? profileInputLoader.LoadException(inputPath!)
             : sharedTraceFile != null
                 ? profileInputLoader.LoadException(sharedTraceFile)
-                : ExceptionProfileCommand(command, label);
+                : collectionRunner.RunExceptionProfile(command, label);
         RenderExceptionResults(results);
     }
 
@@ -941,7 +507,7 @@ rootCommand.SetHandler(context =>
         Console.WriteLine($"{label} - contention");
         var results = hasInput
             ? profileInputLoader.LoadContention(inputPath!)
-            : ContentionProfileCommand(command, label);
+            : collectionRunner.RunContentionProfile(command, label);
         RenderContentionResults(results);
     }
 
@@ -950,7 +516,7 @@ rootCommand.SetHandler(context =>
         Console.WriteLine($"{label} - heap");
         var results = hasInput
             ? profileInputLoader.LoadHeap(inputPath!)
-            : HeapProfileCommand(command, label);
+            : collectionRunner.RunHeapProfile(command, label);
         RenderHeapResults(results);
     }
 });
@@ -963,14 +529,14 @@ void ExamplesSection(HelpContext context)
     }
 
     context.Output.WriteLine();
-    WriteUsageExamples(context.Output);
+    ProfilerCommandLineHelp.WriteUsageExamples(context.Output);
 }
 
 var parser = new CommandLineBuilder(rootCommand)
     .UseDefaults()
     .UseHelpBuilder(_ =>
     {
-        var helpBuilder = new HelpBuilder(LocalizationResources.Instance, GetHelpWidth());
+        var helpBuilder = new HelpBuilder(LocalizationResources.Instance, ProfilerCommandLineHelp.GetHelpWidth());
         helpBuilder.CustomizeLayout(context =>
             HelpBuilder.Default.GetLayout().Concat(new HelpSectionDelegate[] { ExamplesSection }));
         return helpBuilder;

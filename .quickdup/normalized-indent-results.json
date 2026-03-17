@@ -1,25 +1,6 @@
 {
-  "total_patterns": 21,
+  "total_patterns": 12,
   "patterns": [
-    {
-      "hash": "4982526082c67d9e",
-      "score": 1,
-      "complexity": 5,
-      "rank": 6,
-      "lines": 11,
-      "similarity": 0.8461538461538461,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 11
-        },
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 72
-        }
-      ]
-    },
     {
       "hash": "6171989b3fe811b9",
       "score": 5,
@@ -36,82 +17,6 @@
         {
           "filename": "src/ProfilerCore/Rendering/ProfilerConsoleTableWriter.cs",
           "line_start": 41
-        }
-      ]
-    },
-    {
-      "hash": "716064a37e94d935",
-      "score": 5,
-      "complexity": 1,
-      "rank": 6,
-      "lines": 6,
-      "similarity": 1,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfilerCore/Rendering/ProfilerCallTreeRenderer.cs",
-          "line_start": 57
-        },
-        {
-          "filename": "src/ProfilerCore/Rendering/ProfilerCallTreeRenderer.cs",
-          "line_start": 129
-        }
-      ]
-    },
-    {
-      "hash": "8351b847a8ae7b39",
-      "score": 5,
-      "complexity": 1,
-      "rank": 6,
-      "lines": 5,
-      "similarity": 1,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfilerCore/ProfilerTraceAnalyzer.cs",
-          "line_start": 657
-        },
-        {
-          "filename": "src/ProfilerCore/ProfilerTraceAnalyzer.cs",
-          "line_start": 684
-        }
-      ]
-    },
-    {
-      "hash": "c6909e476ee539ac",
-      "score": 1,
-      "complexity": 5,
-      "rank": 6,
-      "lines": 13,
-      "similarity": 0.7647058823529411,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 9
-        },
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 70
-        }
-      ]
-    },
-    {
-      "hash": "dee423b8945a9585",
-      "score": 1,
-      "complexity": 5,
-      "rank": 6,
-      "lines": 12,
-      "similarity": 0.8461538461538461,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 10
-        },
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 71
         }
       ]
     },
@@ -154,21 +59,21 @@
       ]
     },
     {
-      "hash": "31376cd39fe8c53b",
-      "score": 4,
-      "complexity": 1,
+      "hash": "656df1f750e387f2",
+      "score": 3,
+      "complexity": 2,
       "rank": 5,
-      "lines": 5,
+      "lines": 4,
       "similarity": 1,
       "occurrences": 2,
       "locations": [
         {
-          "filename": "src/ProfilerCore/Rendering/ProfilerCallTreeRenderer.cs",
-          "line_start": 58
+          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
+          "line_start": 55
         },
         {
-          "filename": "src/ProfilerCore/Rendering/ProfilerCallTreeRenderer.cs",
-          "line_start": 130
+          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
+          "line_start": 69
         }
       ]
     },
@@ -192,44 +97,6 @@
       ]
     },
     {
-      "hash": "656df1f750e387f2",
-      "score": 3,
-      "complexity": 2,
-      "rank": 5,
-      "lines": 4,
-      "similarity": 1,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
-          "line_start": 55
-        },
-        {
-          "filename": "src/ProfileTool/Cpu/CallTreeNode.cs",
-          "line_start": 69
-        }
-      ]
-    },
-    {
-      "hash": "6e077004f742797a",
-      "score": 1,
-      "complexity": 4,
-      "rank": 5,
-      "lines": 10,
-      "similarity": 0.8,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 12
-        },
-        {
-          "filename": "tests/Asynkron.Profiler.Tests/SpeedscopeParserTests.cs",
-          "line_start": 73
-        }
-      ]
-    },
-    {
       "hash": "7fa13ba7dcd6785b",
       "score": 3,
       "complexity": 2,
@@ -249,44 +116,6 @@
       ]
     },
     {
-      "hash": "9ac779d316115355",
-      "score": 4,
-      "complexity": 1,
-      "rank": 5,
-      "lines": 4,
-      "similarity": 1,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 503
-        },
-        {
-          "filename": "src/ProfileTool/Jit/JitCommandRunner.cs",
-          "line_start": 223
-        }
-      ]
-    },
-    {
-      "hash": "a3ea4ffc0baf98ad",
-      "score": 4,
-      "complexity": 1,
-      "rank": 5,
-      "lines": 4,
-      "similarity": 1,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfilerCore/ProfilerTraceAnalyzer.cs",
-          "line_start": 658
-        },
-        {
-          "filename": "src/ProfilerCore/ProfilerTraceAnalyzer.cs",
-          "line_start": 685
-        }
-      ]
-    },
-    {
       "hash": "bff40200a7925d7f",
       "score": 4,
       "complexity": 1,
@@ -296,12 +125,12 @@
       "occurrences": 2,
       "locations": [
         {
-          "filename": "src/ProfilerCore/ProfilerTraceAnalyzer.cs",
-          "line_start": 242
-        },
-        {
           "filename": "src/ProfileTool/Cpu/SpeedscopeParser.cs",
           "line_start": 148
+        },
+        {
+          "filename": "src/ProfilerCore/ProfilerTraceAnalyzer.cs",
+          "line_start": 242
         }
       ]
     },
@@ -325,6 +154,25 @@
       ]
     },
     {
+      "hash": "e5ee34ff9e1d4cce",
+      "score": 3,
+      "complexity": 2,
+      "rank": 5,
+      "lines": 4,
+      "similarity": 1,
+      "occurrences": 2,
+      "locations": [
+        {
+          "filename": "src/ProfilerCore/ProfilerTraceAnalyzer.cs",
+          "line_start": 27
+        },
+        {
+          "filename": "src/ProfileTool/ProfileCollectionRunner.cs",
+          "line_start": 31
+        }
+      ]
+    },
+    {
       "hash": "e6a1014560388c63",
       "score": 3,
       "complexity": 2,
@@ -340,25 +188,6 @@
         {
           "filename": "src/ProfilerCore/Rendering/CallTreeVisibility.cs",
           "line_start": 6
-        }
-      ]
-    },
-    {
-      "hash": "e94c9f888620ea09",
-      "score": 4,
-      "complexity": 1,
-      "rank": 5,
-      "lines": 4,
-      "similarity": 1,
-      "occurrences": 2,
-      "locations": [
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 379
-        },
-        {
-          "filename": "src/ProfileTool/Program.cs",
-          "line_start": 834
         }
       ]
     },
