@@ -1,9 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Globalization;
-using System.Threading;
-using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
 
 namespace Asynkron.Profiler;
@@ -13,12 +9,11 @@ internal sealed class ProfileCollectionRunner
     public const string DotnetTraceInstallHint = "dotnet tool install -g dotnet-trace";
     public const string DotnetGcdumpInstallHint = "dotnet tool install -g dotnet-gcdump";
 
-    private readonly string _outputDirectory;
     private readonly Func<Theme> _getTheme;
-    private readonly Func<string, string, bool> _ensureToolAvailable;
-    private readonly Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> _runProcess;
+    private readonly ProfileCollectionServices _services;
+    private readonly DotnetTraceCollector _traceCollector;
+    private readonly HeapSnapshotCollector _heapSnapshotCollector;
     private readonly ProfileInputLoader _profileInputLoader;
-    private readonly Action<string> _writeLine;
 
     public ProfileCollectionRunner(
         string outputDirectory,
@@ -28,35 +23,16 @@ internal sealed class ProfileCollectionRunner
         ProfileInputLoader profileInputLoader,
         Action<string> writeLine)
     {
-        _outputDirectory = ArgumentGuard.RequireNotWhiteSpace(outputDirectory, nameof(outputDirectory), "Output directory is required.");
         _getTheme = getTheme;
-        _ensureToolAvailable = ensureToolAvailable;
-        _runProcess = runProcess;
+        _services = new ProfileCollectionServices(outputDirectory, getTheme, ensureToolAvailable, runProcess, writeLine);
+        _traceCollector = new DotnetTraceCollector(_services);
+        _heapSnapshotCollector = new HeapSnapshotCollector(_services);
         _profileInputLoader = profileInputLoader;
-        _writeLine = writeLine;
     }
 
     public string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool includeException)
     {
-        if (!_ensureToolAvailable("dotnet-trace", DotnetTraceInstallHint))
-        {
-            return null;
-        }
-
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        var traceFile = Path.Combine(_outputDirectory, $"{label}_{timestamp}.nettrace");
-        var traceParts = new List<string> { "CPU" };
-        if (includeMemory)
-        {
-            traceParts.Add("allocation");
-        }
-
-        if (includeException)
-        {
-            traceParts.Add("exception");
-        }
-
-        var traceLabel = string.Join(" + ", traceParts);
+        var traceLabel = BuildSharedTraceLabel(includeMemory, includeException);
         var theme = _getTheme();
 
         return AnsiConsole.Status()
@@ -64,34 +40,22 @@ internal sealed class ProfileCollectionRunner
             .Start($"Collecting {traceLabel} trace for [{theme.AccentColor}]{label}[/]...", ctx =>
             {
                 ctx.Status("Collecting trace data...");
-                var collectArgs = new List<string> { "collect" };
-                if (includeMemory)
-                {
-                    collectArgs.Add("--profile");
-                    collectArgs.Add("gc-verbose");
-                }
+                return _traceCollector.Collect(
+                    command,
+                    label,
+                    "nettrace",
+                    "Trace collection failed",
+                    collectArgs =>
+                    {
+                        if (includeMemory)
+                        {
+                            collectArgs.Add("--profile");
+                            collectArgs.Add("gc-verbose");
+                        }
 
-                var providers = new List<string> { "Microsoft-DotNETCore-SampleProfiler" };
-                if (includeException)
-                {
-                    providers.Add(BuildExceptionProvider());
-                }
-
-                collectArgs.Add("--providers");
-                collectArgs.Add(string.Join(",", providers));
-                collectArgs.Add("--output");
-                collectArgs.Add(traceFile);
-                collectArgs.Add("--");
-                collectArgs.AddRange(command);
-
-                var (success, _, stderr) = _runProcess("dotnet-trace", collectArgs, null, 180000);
-                if (!success || !File.Exists(traceFile))
-                {
-                    _writeLine($"[{_getTheme().ErrorColor}]Trace collection failed:[/] {Markup.Escape(stderr)}");
-                    return null;
-                }
-
-                return traceFile;
+                        collectArgs.Add("--providers");
+                        collectArgs.Add(DotnetTraceProviderFactory.BuildCpuProviderList(includeException));
+                    });
             });
     }
 
@@ -107,7 +71,7 @@ internal sealed class ProfileCollectionRunner
             collectArgs =>
             {
                 collectArgs.Add("--providers");
-                collectArgs.Add("Microsoft-DotNETCore-SampleProfiler");
+                collectArgs.Add(DotnetTraceProviderFactory.BuildCpuProviderList(includeException: false));
             },
             _profileInputLoader.AnalyzeCpuTrace);
     }
@@ -133,7 +97,6 @@ internal sealed class ProfileCollectionRunner
 
     public ExceptionProfileResult? RunExceptionProfile(string[] command, string label)
     {
-        var provider = BuildExceptionProvider();
         return CollectTraceAndAnalyze(
             command,
             label,
@@ -144,17 +107,13 @@ internal sealed class ProfileCollectionRunner
             collectArgs =>
             {
                 collectArgs.Add("--providers");
-                collectArgs.Add(provider);
+                collectArgs.Add(DotnetTraceProviderFactory.BuildExceptionProvider());
             },
             _profileInputLoader.AnalyzeExceptionTrace);
     }
 
     public ContentionProfileResult? RunContentionProfile(string[] command, string label)
     {
-        var keywordsValue = ClrTraceEventParser.Keywords.Contention | ClrTraceEventParser.Keywords.Threading;
-        var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
-        var provider = $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
-
         return CollectTraceAndAnalyze(
             command,
             label,
@@ -165,59 +124,26 @@ internal sealed class ProfileCollectionRunner
             collectArgs =>
             {
                 collectArgs.Add("--providers");
-                collectArgs.Add(provider);
+                collectArgs.Add(DotnetTraceProviderFactory.BuildContentionProvider());
             },
             _profileInputLoader.AnalyzeContentionTrace);
     }
 
     public HeapProfileResult? RunHeapProfile(string[] command, string label)
     {
-        if (!_ensureToolAvailable("dotnet-gcdump", DotnetGcdumpInstallHint))
-        {
-            return null;
-        }
-
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        var gcdumpFile = Path.Combine(_outputDirectory, $"{label}_{timestamp}.gcdump");
-        var theme = _getTheme();
-
         AnsiConsole.MarkupLine("[dim]Capturing heap snapshot...[/]");
-
-        if (command.Length == 0)
+        var gcdumpFile = _heapSnapshotCollector.Collect(command, label);
+        if (gcdumpFile == null)
         {
-            _writeLine($"[{theme.ErrorColor}]No command provided for heap snapshot.[/]");
-            return null;
-        }
-
-        using var process = Process.Start(CommandStartInfoFactory.Create(command));
-        if (process == null)
-        {
-            _writeLine($"[{theme.ErrorColor}]Failed to start process for heap snapshot.[/]");
-            return null;
-        }
-
-        Thread.Sleep(500);
-
-        var (success, _, stderr) = _runProcess(
-            "dotnet-gcdump",
-            ["collect", "-p", process.Id.ToString(CultureInfo.InvariantCulture), "-o", gcdumpFile],
-            null,
-            60000);
-
-        process.WaitForExit();
-
-        if (!success || !File.Exists(gcdumpFile))
-        {
-            _writeLine($"[{theme.ErrorColor}]GC dump collection failed:[/] {Markup.Escape(stderr)}");
             return null;
         }
 
         return GcdumpReportLoader.Load(
             gcdumpFile,
-            theme,
-            _runProcess,
+            _getTheme(),
+            _services.RunProcess,
             GcdumpReportParser.Parse,
-            _writeLine);
+            _services.WriteLine);
     }
 
     private TResult? CollectTraceAndAnalyze<TResult>(
@@ -230,30 +156,14 @@ internal sealed class ProfileCollectionRunner
         Action<List<string>> configureCollectArgs,
         Func<string, TResult?> analyzeTrace)
     {
-        if (!_ensureToolAvailable("dotnet-trace", DotnetTraceInstallHint))
-        {
-            return default;
-        }
-
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        var traceFile = Path.Combine(_outputDirectory, $"{label}_{timestamp}.{traceSuffix}");
-
         return AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
             .Start(startMessage, ctx =>
             {
                 ctx.Status("Collecting trace data...");
-                var collectArgs = new List<string> { "collect" };
-                configureCollectArgs(collectArgs);
-                collectArgs.Add("--output");
-                collectArgs.Add(traceFile);
-                collectArgs.Add("--");
-                collectArgs.AddRange(command);
-
-                var (success, _, stderr) = _runProcess("dotnet-trace", collectArgs, null, 180000);
-                if (!success || !File.Exists(traceFile))
+                var traceFile = _traceCollector.Collect(command, label, traceSuffix, failureLabel, configureCollectArgs);
+                if (traceFile == null)
                 {
-                    _writeLine($"[{_getTheme().ErrorColor}]{failureLabel}:[/] {Markup.Escape(stderr)}");
                     return default;
                 }
 
@@ -262,10 +172,19 @@ internal sealed class ProfileCollectionRunner
             });
     }
 
-    private static string BuildExceptionProvider()
+    private static string BuildSharedTraceLabel(bool includeMemory, bool includeException)
     {
-        var keywordsValue = ClrTraceEventParser.Keywords.Exception;
-        var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
-        return $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
+        var traceParts = new List<string> { "CPU" };
+        if (includeMemory)
+        {
+            traceParts.Add("allocation");
+        }
+
+        if (includeException)
+        {
+            traceParts.Add("exception");
+        }
+
+        return string.Join(" + ", traceParts);
     }
 }
