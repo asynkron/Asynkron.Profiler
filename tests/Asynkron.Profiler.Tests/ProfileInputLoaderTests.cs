@@ -31,7 +31,7 @@ public sealed class ProfileInputLoaderTests
             .ToArray();
         var callTree = new AllocationCallTreeResult(roots.Sum(root => root.TotalBytes), roots.Sum(root => root.Count), roots);
 
-        var result = ProfileInputLoader.BuildMemoryProfileResult(callTree);
+        var result = MemoryProfileResultFactory.Create(callTree);
 
         Assert.Equal("1.50 KB", result.TotalAllocated);
         Assert.Equal("1.50 KB", result.AllocationTotal);
@@ -103,9 +103,20 @@ public sealed class ProfileInputLoaderTests
     [Fact]
     public void BuildInputLabel_FallsBackToInputWhenFileNameIsMissing()
     {
-        var label = ProfileInputLoader.BuildInputLabel(string.Empty);
+        var label = ProfileInputConventions.BuildInputLabel(string.Empty);
 
         Assert.Equal("input", label);
+    }
+
+    [Fact]
+    public void Classify_MapsExtensionsToExpectedKinds()
+    {
+        Assert.Equal(ProfileInputKind.Speedscope, ProfileInputConventions.Classify("trace.json"));
+        Assert.Equal(ProfileInputKind.NetTrace, ProfileInputConventions.Classify("trace.nettrace"));
+        Assert.Equal(ProfileInputKind.TraceLog, ProfileInputConventions.Classify("trace.etlx"));
+        Assert.Equal(ProfileInputKind.GcDump, ProfileInputConventions.Classify("trace.gcdump"));
+        Assert.Equal(ProfileInputKind.HeapReport, ProfileInputConventions.Classify("trace.log"));
+        Assert.Equal(ProfileInputKind.Unknown, ProfileInputConventions.Classify("trace.bin"));
     }
 
     private static void AssertModes(
@@ -122,7 +133,7 @@ public sealed class ProfileInputLoaderTests
         var runException = false;
         var runContention = false;
 
-        ProfileInputLoader.ApplyInputDefaults(
+        ProfileInputConventions.ApplyInputDefaults(
             inputPath,
             ref runCpu,
             ref runMemory,
@@ -147,7 +158,7 @@ public sealed class ProfileInputLoaderTests
         Directory.CreateDirectory(outputDir);
 
         return new ProfileInputLoader(
-            new ProfilerTraceAnalyzer(outputDir),
+            new ProfileTraceAnalysisRunner(new ProfilerTraceAnalyzer(outputDir), () => Theme.Current, message => messages?.Add(message)),
             () => Theme.Current,
             ensureToolAvailable,
             runProcess ?? ((_, _, _, _) => (true, string.Empty, string.Empty)),

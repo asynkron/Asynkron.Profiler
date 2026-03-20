@@ -9,6 +9,7 @@ internal sealed class ProfilerCommandExecutor
     private readonly ProfileCollectionRunner _collectionRunner;
     private readonly string _outputDirectory;
     private readonly ProfileInputLoader _profileInputLoader;
+    private readonly ProfileTraceAnalysisRunner _traceAnalysisRunner;
     private readonly ProfilerExecutionRequestFactory _requestFactory;
     private readonly ProfilerToolAvailability _toolAvailability;
 
@@ -29,8 +30,9 @@ internal sealed class ProfilerCommandExecutor
         _toolAvailability = new ProfilerToolAvailability(() => _theme, ProcessRunner.Run, AnsiConsole.MarkupLine);
 
         var traceAnalyzer = new ProfilerTraceAnalyzer(_outputDirectory);
+        _traceAnalysisRunner = new ProfileTraceAnalysisRunner(traceAnalyzer, () => _theme, AnsiConsole.MarkupLine);
         _profileInputLoader = new ProfileInputLoader(
-            traceAnalyzer,
+            _traceAnalysisRunner,
             () => _theme,
             _toolAvailability.EnsureAvailable,
             ProcessRunner.Run,
@@ -42,7 +44,7 @@ internal sealed class ProfilerCommandExecutor
             () => _theme,
             _toolAvailability.EnsureAvailable,
             ProcessRunner.Run,
-            _profileInputLoader,
+            _traceAnalysisRunner,
             AnsiConsole.MarkupLine);
         _requestFactory = new ProfilerExecutionRequestFactory(() => _theme, ProcessRunner.Run);
     }
@@ -156,7 +158,7 @@ internal sealed class ProfilerCommandExecutor
         }
 
         return sharedTraceFile != null
-            ? _profileInputLoader.AnalyzeCpuTrace(sharedTraceFile)
+            ? _traceAnalysisRunner.AnalyzeCpuTrace(sharedTraceFile)
             : _collectionRunner.RunCpuProfile(request.Command, request.Label);
     }
 
@@ -180,7 +182,7 @@ internal sealed class ProfilerCommandExecutor
         }
 
         return sharedTraceFile != null
-            ? _profileInputLoader.LoadException(sharedTraceFile)
+            ? _traceAnalysisRunner.AnalyzeExceptionTrace(sharedTraceFile)
             : _collectionRunner.RunExceptionProfile(request.Command, request.Label);
     }
 

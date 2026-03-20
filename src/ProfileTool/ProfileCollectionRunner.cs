@@ -17,7 +17,7 @@ internal sealed class ProfileCollectionRunner
     private readonly Func<Theme> _getTheme;
     private readonly Func<string, string, bool> _ensureToolAvailable;
     private readonly Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> _runProcess;
-    private readonly ProfileInputLoader _profileInputLoader;
+    private readonly ProfileTraceAnalysisRunner _analysisRunner;
     private readonly Action<string> _writeLine;
 
     public ProfileCollectionRunner(
@@ -25,14 +25,14 @@ internal sealed class ProfileCollectionRunner
         Func<Theme> getTheme,
         Func<string, string, bool> ensureToolAvailable,
         Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> runProcess,
-        ProfileInputLoader profileInputLoader,
+        ProfileTraceAnalysisRunner analysisRunner,
         Action<string> writeLine)
     {
         _outputDirectory = ArgumentGuard.RequireNotWhiteSpace(outputDirectory, nameof(outputDirectory), "Output directory is required.");
         _getTheme = getTheme;
         _ensureToolAvailable = ensureToolAvailable;
         _runProcess = runProcess;
-        _profileInputLoader = profileInputLoader;
+        _analysisRunner = analysisRunner;
         _writeLine = writeLine;
     }
 
@@ -109,7 +109,7 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--providers");
                 collectArgs.Add("Microsoft-DotNETCore-SampleProfiler");
             },
-            _profileInputLoader.AnalyzeCpuTrace);
+            _analysisRunner.AnalyzeCpuTrace);
     }
 
     public MemoryProfileResult? RunMemoryProfile(string[] command, string label)
@@ -126,9 +126,9 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--profile");
                 collectArgs.Add("gc-verbose");
             },
-            _profileInputLoader.AnalyzeAllocationTrace);
+            _analysisRunner.AnalyzeAllocationTrace);
 
-        return callTree == null ? null : ProfileInputLoader.BuildMemoryProfileResult(callTree);
+        return callTree == null ? null : MemoryProfileResultFactory.Create(callTree);
     }
 
     public ExceptionProfileResult? RunExceptionProfile(string[] command, string label)
@@ -146,7 +146,7 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--providers");
                 collectArgs.Add(provider);
             },
-            _profileInputLoader.AnalyzeExceptionTrace);
+            _analysisRunner.AnalyzeExceptionTrace);
     }
 
     public ContentionProfileResult? RunContentionProfile(string[] command, string label)
@@ -167,7 +167,7 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--providers");
                 collectArgs.Add(provider);
             },
-            _profileInputLoader.AnalyzeContentionTrace);
+            _analysisRunner.AnalyzeContentionTrace);
     }
 
     public HeapProfileResult? RunHeapProfile(string[] command, string label)
