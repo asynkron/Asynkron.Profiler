@@ -6,22 +6,43 @@ using Xunit;
 
 namespace Asynkron.Profiler.Tests;
 
-public sealed class ProfileInputLoaderTests
+public sealed class ProfileInputCatalogTests
 {
     [Fact]
-    public void ApplyInputDefaults_MapsExtensionsToExpectedModes()
+    public void GetDefaultModes_MapsExtensionsToExpectedModes()
     {
-        AssertModes("trace.json", expectedCpu: true, expectedMemory: false, expectedHeap: false, expectedException: false, expectedContention: false);
-        AssertModes("trace.nettrace", expectedCpu: true, expectedMemory: false, expectedHeap: false, expectedException: true, expectedContention: true);
-        AssertModes("trace.etlx", expectedCpu: false, expectedMemory: true, expectedHeap: false, expectedException: true, expectedContention: true);
-        AssertModes("trace.gcdump", expectedCpu: false, expectedMemory: false, expectedHeap: true, expectedException: false, expectedContention: false);
-        AssertModes("trace.unknown", expectedCpu: true, expectedMemory: false, expectedHeap: false, expectedException: false, expectedContention: false);
+        AssertModes("trace.json", new ProfileInputModes(true, false, false, false, false));
+        AssertModes("trace.nettrace", new ProfileInputModes(true, false, false, true, true));
+        AssertModes("trace.etlx", new ProfileInputModes(false, true, false, true, true));
+        AssertModes("trace.gcdump", new ProfileInputModes(false, false, true, false, false));
+        AssertModes("trace.unknown", new ProfileInputModes(true, false, false, false, false));
     }
 
     [Fact]
-    public void BuildMemoryProfileResult_SortsEntriesAndCapsAtFifty()
+    public void BuildLabel_FallsBackToInputWhenFileNameIsMissing()
     {
-        var loader = CreateLoader((_, _) => true);
+        var label = ProfileInputCatalog.BuildLabel(string.Empty);
+
+        Assert.Equal("input", label);
+    }
+
+    private static void AssertModes(string inputPath, ProfileInputModes expected)
+    {
+        var actual = ProfileInputCatalog.GetDefaultModes(inputPath);
+
+        Assert.Equal(expected.RunCpu, actual.RunCpu);
+        Assert.Equal(expected.RunMemory, actual.RunMemory);
+        Assert.Equal(expected.RunHeap, actual.RunHeap);
+        Assert.Equal(expected.RunException, actual.RunException);
+        Assert.Equal(expected.RunContention, actual.RunContention);
+    }
+}
+
+public sealed class MemoryProfileResultFactoryTests
+{
+    [Fact]
+    public void Create_SortsEntriesAndCapsAtFifty()
+    {
         var roots = Enumerable.Range(0, 55)
             .Select(index => new AllocationCallTreeNode($"Type{index}")
             {
@@ -31,7 +52,7 @@ public sealed class ProfileInputLoaderTests
             .ToArray();
         var callTree = new AllocationCallTreeResult(roots.Sum(root => root.TotalBytes), roots.Sum(root => root.Count), roots);
 
-        var result = ProfileInputLoader.BuildMemoryProfileResult(callTree);
+        var result = MemoryProfileResultFactory.Create(callTree);
 
         Assert.Equal("1.50 KB", result.TotalAllocated);
         Assert.Equal("1.50 KB", result.AllocationTotal);
@@ -41,7 +62,10 @@ public sealed class ProfileInputLoaderTests
         Assert.Equal("55 B", result.AllocationEntries[0].Total);
         Assert.Equal("Type5", result.AllocationEntries[^1].Type);
     }
+}
 
+public sealed class HeapProfileInputServiceTests
+{
     [Fact]
     public void LoadHeap_UsesGcdumpLoaderWhenToolIsAvailable()
     {
@@ -100,59 +124,22 @@ public sealed class ProfileInputLoaderTests
         }
     }
 
-    [Fact]
-    public void BuildInputLabel_FallsBackToInputWhenFileNameIsMissing()
-    {
-        var label = ProfileInputLoader.BuildInputLabel(string.Empty);
-
-        Assert.Equal("input", label);
-    }
-
-    private static void AssertModes(
-        string inputPath,
-        bool expectedCpu,
-        bool expectedMemory,
-        bool expectedHeap,
-        bool expectedException,
-        bool expectedContention)
-    {
-        var runCpu = false;
-        var runMemory = false;
-        var runHeap = false;
-        var runException = false;
-        var runContention = false;
-
-        ProfileInputLoader.ApplyInputDefaults(
-            inputPath,
-            ref runCpu,
-            ref runMemory,
-            ref runHeap,
-            ref runException,
-            ref runContention);
-
-        Assert.Equal(expectedCpu, runCpu);
-        Assert.Equal(expectedMemory, runMemory);
-        Assert.Equal(expectedHeap, runHeap);
-        Assert.Equal(expectedException, runException);
-        Assert.Equal(expectedContention, runContention);
-    }
-
-    private static ProfileInputLoader CreateLoader(
+    private static HeapProfileInputService CreateLoader(
         Func<string, string, bool> ensureToolAvailable,
         Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)>? runProcess = null,
         Func<string, HeapProfileResult>? parseGcdumpReport = null,
         List<string>? messages = null)
     {
-        var outputDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(outputDir);
+        var writeLine = new Action<string>(message => messages?.Add(message));
+        var reporter = new ProfileLoadReporter(() => Theme.Current, writeLine);
 
-        return new ProfileInputLoader(
-            new ProfilerTraceAnalyzer(outputDir),
+        return new HeapProfileInputService(
             () => Theme.Current,
             ensureToolAvailable,
             runProcess ?? ((_, _, _, _) => (true, string.Empty, string.Empty)),
             parseGcdumpReport ?? (output => new HeapProfileResult(output, [])),
-            message => messages?.Add(message),
-            "dotnet tool install -g dotnet-gcdump");
+            writeLine,
+            ProfilerToolInstallHints.DotnetGcdump,
+            reporter);
     }
 }

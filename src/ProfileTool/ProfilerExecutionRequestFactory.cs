@@ -37,19 +37,18 @@ internal sealed class ProfilerExecutionRequestFactory
 
         if (hasInput)
         {
-            label = ProfileInputLoader.BuildInputLabel(invocation.InputPath!);
+            label = ProfileInputCatalog.BuildLabel(invocation.InputPath!);
             description = invocation.InputPath!;
             command = Array.Empty<string>();
 
             if (!hasExplicitModes)
             {
-                ProfileInputLoader.ApplyInputDefaults(
-                    invocation.InputPath!,
-                    ref runCpu,
-                    ref runMemory,
-                    ref runHeap,
-                    ref runException,
-                    ref runContention);
+                var defaultModes = ProfileInputCatalog.GetDefaultModes(invocation.InputPath!);
+                runCpu = defaultModes.RunCpu;
+                runMemory = defaultModes.RunMemory;
+                runHeap = defaultModes.RunHeap;
+                runException = defaultModes.RunException;
+                runContention = defaultModes.RunContention;
             }
         }
         else

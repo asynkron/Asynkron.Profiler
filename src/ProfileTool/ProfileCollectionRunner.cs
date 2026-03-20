@@ -3,21 +3,18 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
-using Microsoft.Diagnostics.Tracing.Parsers;
 using Spectre.Console;
 
 namespace Asynkron.Profiler;
 
 internal sealed class ProfileCollectionRunner
 {
-    public const string DotnetTraceInstallHint = "dotnet tool install -g dotnet-trace";
-    public const string DotnetGcdumpInstallHint = "dotnet tool install -g dotnet-gcdump";
-
-    private readonly string _outputDirectory;
-    private readonly Func<Theme> _getTheme;
     private readonly Func<string, string, bool> _ensureToolAvailable;
+    private readonly Func<Theme> _getTheme;
+    private readonly HeapProfileInputService _heapProfileInputService;
+    private readonly string _outputDirectory;
     private readonly Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> _runProcess;
-    private readonly ProfileInputLoader _profileInputLoader;
+    private readonly TraceProfileInputService _traceProfileInputService;
     private readonly Action<string> _writeLine;
 
     public ProfileCollectionRunner(
@@ -25,26 +22,27 @@ internal sealed class ProfileCollectionRunner
         Func<Theme> getTheme,
         Func<string, string, bool> ensureToolAvailable,
         Func<string, IEnumerable<string>, string?, int, (bool Success, string StdOut, string StdErr)> runProcess,
-        ProfileInputLoader profileInputLoader,
+        TraceProfileInputService traceProfileInputService,
+        HeapProfileInputService heapProfileInputService,
         Action<string> writeLine)
     {
         _outputDirectory = ArgumentGuard.RequireNotWhiteSpace(outputDirectory, nameof(outputDirectory), "Output directory is required.");
         _getTheme = getTheme;
         _ensureToolAvailable = ensureToolAvailable;
         _runProcess = runProcess;
-        _profileInputLoader = profileInputLoader;
+        _traceProfileInputService = traceProfileInputService;
+        _heapProfileInputService = heapProfileInputService;
         _writeLine = writeLine;
     }
 
     public string? CollectCpuTrace(string[] command, string label, bool includeMemory, bool includeException)
     {
-        if (!_ensureToolAvailable("dotnet-trace", DotnetTraceInstallHint))
+        if (!_ensureToolAvailable("dotnet-trace", ProfilerToolInstallHints.DotnetTrace))
         {
             return null;
         }
 
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        var traceFile = Path.Combine(_outputDirectory, $"{label}_{timestamp}.nettrace");
+        var traceFile = ProfileArtifactPathFactory.Create(_outputDirectory, label, "nettrace");
         var traceParts = new List<string> { "CPU" };
         if (includeMemory)
         {
@@ -74,7 +72,7 @@ internal sealed class ProfileCollectionRunner
                 var providers = new List<string> { "Microsoft-DotNETCore-SampleProfiler" };
                 if (includeException)
                 {
-                    providers.Add(BuildExceptionProvider());
+                    providers.Add(DotnetRuntimeProviderFactory.CreateExceptionProvider());
                 }
 
                 collectArgs.Add("--providers");
@@ -109,7 +107,7 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--providers");
                 collectArgs.Add("Microsoft-DotNETCore-SampleProfiler");
             },
-            _profileInputLoader.AnalyzeCpuTrace);
+            _traceProfileInputService.AnalyzeCpuTrace);
     }
 
     public MemoryProfileResult? RunMemoryProfile(string[] command, string label)
@@ -126,14 +124,14 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--profile");
                 collectArgs.Add("gc-verbose");
             },
-            _profileInputLoader.AnalyzeAllocationTrace);
+            _traceProfileInputService.AnalyzeAllocationTrace);
 
-        return callTree == null ? null : ProfileInputLoader.BuildMemoryProfileResult(callTree);
+        return callTree == null ? null : MemoryProfileResultFactory.Create(callTree);
     }
 
     public ExceptionProfileResult? RunExceptionProfile(string[] command, string label)
     {
-        var provider = BuildExceptionProvider();
+        var provider = DotnetRuntimeProviderFactory.CreateExceptionProvider();
         return CollectTraceAndAnalyze(
             command,
             label,
@@ -146,15 +144,12 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--providers");
                 collectArgs.Add(provider);
             },
-            _profileInputLoader.AnalyzeExceptionTrace);
+            _traceProfileInputService.AnalyzeExceptionTrace);
     }
 
     public ContentionProfileResult? RunContentionProfile(string[] command, string label)
     {
-        var keywordsValue = ClrTraceEventParser.Keywords.Contention | ClrTraceEventParser.Keywords.Threading;
-        var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
-        var provider = $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
-
+        var provider = DotnetRuntimeProviderFactory.CreateContentionProvider();
         return CollectTraceAndAnalyze(
             command,
             label,
@@ -167,18 +162,17 @@ internal sealed class ProfileCollectionRunner
                 collectArgs.Add("--providers");
                 collectArgs.Add(provider);
             },
-            _profileInputLoader.AnalyzeContentionTrace);
+            _traceProfileInputService.AnalyzeContentionTrace);
     }
 
     public HeapProfileResult? RunHeapProfile(string[] command, string label)
     {
-        if (!_ensureToolAvailable("dotnet-gcdump", DotnetGcdumpInstallHint))
+        if (!_ensureToolAvailable("dotnet-gcdump", ProfilerToolInstallHints.DotnetGcdump))
         {
             return null;
         }
 
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        var gcdumpFile = Path.Combine(_outputDirectory, $"{label}_{timestamp}.gcdump");
+        var gcdumpFile = ProfileArtifactPathFactory.Create(_outputDirectory, label, "gcdump");
         var theme = _getTheme();
 
         AnsiConsole.MarkupLine("[dim]Capturing heap snapshot...[/]");
@@ -212,12 +206,7 @@ internal sealed class ProfileCollectionRunner
             return null;
         }
 
-        return GcdumpReportLoader.Load(
-            gcdumpFile,
-            theme,
-            _runProcess,
-            GcdumpReportParser.Parse,
-            _writeLine);
+        return _heapProfileInputService.LoadCollectedGcdump(gcdumpFile);
     }
 
     private TResult? CollectTraceAndAnalyze<TResult>(
@@ -230,13 +219,12 @@ internal sealed class ProfileCollectionRunner
         Action<List<string>> configureCollectArgs,
         Func<string, TResult?> analyzeTrace)
     {
-        if (!_ensureToolAvailable("dotnet-trace", DotnetTraceInstallHint))
+        if (!_ensureToolAvailable("dotnet-trace", ProfilerToolInstallHints.DotnetTrace))
         {
             return default;
         }
 
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        var traceFile = Path.Combine(_outputDirectory, $"{label}_{timestamp}.{traceSuffix}");
+        var traceFile = ProfileArtifactPathFactory.Create(_outputDirectory, label, traceSuffix);
 
         return AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
@@ -260,12 +248,5 @@ internal sealed class ProfileCollectionRunner
                 ctx.Status(analysisStatus);
                 return analyzeTrace(traceFile);
             });
-    }
-
-    private static string BuildExceptionProvider()
-    {
-        var keywordsValue = ClrTraceEventParser.Keywords.Exception;
-        var keywords = ((ulong)keywordsValue).ToString("x", CultureInfo.InvariantCulture);
-        return $"Microsoft-Windows-DotNETRuntime:0x{keywords}:4";
     }
 }

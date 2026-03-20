@@ -7,9 +7,10 @@ namespace Asynkron.Profiler;
 internal sealed class ProfilerCommandExecutor
 {
     private readonly ProfileCollectionRunner _collectionRunner;
+    private readonly HeapProfileInputService _heapProfileInputService;
     private readonly string _outputDirectory;
-    private readonly ProfileInputLoader _profileInputLoader;
     private readonly ProfilerExecutionRequestFactory _requestFactory;
+    private readonly TraceProfileInputService _traceProfileInputService;
     private readonly ProfilerToolAvailability _toolAvailability;
 
     private HotJitDisasmRunner _hotJitDisasmRunner = null!;
@@ -28,21 +29,26 @@ internal sealed class ProfilerCommandExecutor
         RefreshThemeServices();
         _toolAvailability = new ProfilerToolAvailability(() => _theme, ProcessRunner.Run, AnsiConsole.MarkupLine);
 
+        var profileLoadReporter = new ProfileLoadReporter(() => _theme, AnsiConsole.MarkupLine);
         var traceAnalyzer = new ProfilerTraceAnalyzer(_outputDirectory);
-        _profileInputLoader = new ProfileInputLoader(
+        _traceProfileInputService = new TraceProfileInputService(
             traceAnalyzer,
+            profileLoadReporter);
+        _heapProfileInputService = new HeapProfileInputService(
             () => _theme,
             _toolAvailability.EnsureAvailable,
             ProcessRunner.Run,
             GcdumpReportParser.Parse,
             AnsiConsole.MarkupLine,
-            ProfileCollectionRunner.DotnetGcdumpInstallHint);
+            ProfilerToolInstallHints.DotnetGcdump,
+            profileLoadReporter);
         _collectionRunner = new ProfileCollectionRunner(
             _outputDirectory,
             () => _theme,
             _toolAvailability.EnsureAvailable,
             ProcessRunner.Run,
-            _profileInputLoader,
+            _traceProfileInputService,
+            _heapProfileInputService,
             AnsiConsole.MarkupLine);
         _requestFactory = new ProfilerExecutionRequestFactory(() => _theme, ProcessRunner.Run);
     }
@@ -152,11 +158,11 @@ internal sealed class ProfilerCommandExecutor
     {
         if (request.HasInput)
         {
-            return _profileInputLoader.LoadCpu(request.InputPath!);
+            return _traceProfileInputService.LoadCpu(request.InputPath!);
         }
 
         return sharedTraceFile != null
-            ? _profileInputLoader.AnalyzeCpuTrace(sharedTraceFile)
+            ? _traceProfileInputService.AnalyzeCpuTrace(sharedTraceFile)
             : _collectionRunner.RunCpuProfile(request.Command, request.Label);
     }
 
@@ -164,11 +170,11 @@ internal sealed class ProfilerCommandExecutor
     {
         if (request.HasInput)
         {
-            return _profileInputLoader.LoadMemory(request.InputPath!);
+            return _traceProfileInputService.LoadMemory(request.InputPath!);
         }
 
         return sharedTraceFile != null
-            ? _profileInputLoader.LoadMemory(sharedTraceFile)
+            ? _traceProfileInputService.LoadMemory(sharedTraceFile)
             : _collectionRunner.RunMemoryProfile(request.Command, request.Label);
     }
 
@@ -176,25 +182,25 @@ internal sealed class ProfilerCommandExecutor
     {
         if (request.HasInput)
         {
-            return _profileInputLoader.LoadException(request.InputPath!);
+            return _traceProfileInputService.LoadException(request.InputPath!);
         }
 
         return sharedTraceFile != null
-            ? _profileInputLoader.LoadException(sharedTraceFile)
+            ? _traceProfileInputService.LoadException(sharedTraceFile)
             : _collectionRunner.RunExceptionProfile(request.Command, request.Label);
     }
 
     private ContentionProfileResult? ResolveContentionResults(ProfilerExecutionRequest request)
     {
         return request.HasInput
-            ? _profileInputLoader.LoadContention(request.InputPath!)
+            ? _traceProfileInputService.LoadContention(request.InputPath!)
             : _collectionRunner.RunContentionProfile(request.Command, request.Label);
     }
 
     private HeapProfileResult? ResolveHeapResults(ProfilerExecutionRequest request)
     {
         return request.HasInput
-            ? _profileInputLoader.LoadHeap(request.InputPath!)
+            ? _heapProfileInputService.LoadHeap(request.InputPath!)
             : _collectionRunner.RunHeapProfile(request.Command, request.Label);
     }
 
