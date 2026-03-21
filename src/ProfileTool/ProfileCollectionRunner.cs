@@ -92,7 +92,7 @@ internal sealed class ProfileCollectionRunner
             },
             _profileInputLoader.AnalyzeAllocationTrace);
 
-        return callTree == null ? null : ProfileInputLoader.BuildMemoryProfileResult(callTree);
+        return callTree == null ? null : MemoryProfileResultFactory.Create(callTree);
     }
 
     public ExceptionProfileResult? RunExceptionProfile(string[] command, string label)
