@@ -35,63 +35,36 @@ public sealed class SpeedscopeParserTests
         Assert.Equal("ms", result.TimeUnitLabel);
         Assert.Equal("Calls", result.CountLabel);
         Assert.Equal("x", result.CountSuffix);
-        var root = result.CallTreeRoot;
-        var nodeA = root.Children.Values.Single(node => node.Name == "A");
-        var nodeB = nodeA.Children.Values.Single(node => node.Name == "B");
-        var nodeC = nodeA.Children.Values.Single(node => node.Name == "C");
-
-        Assert.Equal(11d, nodeA.Total, 3);
-        Assert.Equal(2, nodeA.Calls);
-        Assert.Equal(2d, nodeB.Total, 3);
-        Assert.Equal(2d, nodeC.Total, 3);
-
-        var sampleA = result.AllFunctions.Single(sample => sample.Name == "A");
-        var sampleB = result.AllFunctions.Single(sample => sample.Name == "B");
-        var sampleC = result.AllFunctions.Single(sample => sample.Name == "C");
-
-        AssertFunction(sampleA, 11d, 2);
-        AssertFunction(sampleB, 2d, 1);
-        AssertFunction(sampleC, 2d, 1);
+        var nodeA = AssertNode(result.CallTreeRoot, "A", 11d, 2);
+        AssertNode(nodeA, "B", 2d, 1);
+        AssertNode(nodeA, "C", 2d, 1);
+        AssertFunctions(result, ("A", 11d, 2), ("B", 2d, 1), ("C", 2d, 1));
     }
 
     [Fact]
     public void ParsesSampledProfilesWithWeights()
     {
-        var result = Parse(CreateSpeedscopeJson(
-            """
-                {
-                  "type": "sampled",
-                  "unit": "samples",
-                  "samples": [
-                    [0, 1],
-                    [0, 2]
-                  ],
-                  "weights": [2, 1]
-                }
-            """));
+        var result = ParseSampled("samples", "[0, 1],\n                    [0, 2]", "2, 1");
 
         Assert.Equal("samples", result.TimeUnitLabel);
         Assert.Equal("Samples", result.CountLabel);
         Assert.Equal(" samp", result.CountSuffix);
-        var root = result.CallTreeRoot;
-        var nodeA = root.Children.Values.Single(node => node.Name == "A");
-        var nodeB = nodeA.Children.Values.Single(node => node.Name == "B");
-        var nodeC = nodeA.Children.Values.Single(node => node.Name == "C");
+        var nodeA = AssertNode(result.CallTreeRoot, "A", 3d, 3);
+        AssertNode(nodeA, "B", 2d, 2);
+        AssertNode(nodeA, "C", 1d, 1);
+        AssertFunctions(result, ("A", 3d, 3), ("B", 2d, 2), ("C", 1d, 1));
+    }
 
-        Assert.Equal(3d, nodeA.Total, 3);
-        Assert.Equal(3, nodeA.Calls);
-        Assert.Equal(2d, nodeB.Total, 3);
-        Assert.Equal(2, nodeB.Calls);
-        Assert.Equal(1d, nodeC.Total, 3);
-        Assert.Equal(1, nodeC.Calls);
+    [Fact]
+    public void ConvertsTimeBasedSampleWeightsToMilliseconds()
+    {
+        var result = ParseSampled("microseconds", "[0]", "500");
 
-        var sampleA = result.AllFunctions.Single(sample => sample.Name == "A");
-        var sampleB = result.AllFunctions.Single(sample => sample.Name == "B");
-        var sampleC = result.AllFunctions.Single(sample => sample.Name == "C");
+        Assert.Equal("ms", result.TimeUnitLabel);
+        Assert.Equal("Samples", result.CountLabel);
+        Assert.Equal(" samp", result.CountSuffix);
 
-        AssertFunction(sampleA, 3d, 3);
-        AssertFunction(sampleB, 2d, 2);
-        AssertFunction(sampleC, 1d, 1);
+        AssertFunctions(result, ("A", 0.5d, 1));
     }
 
     private static CpuProfileResult Parse(string json)
@@ -99,6 +72,20 @@ public sealed class SpeedscopeParserTests
         var result = SpeedscopeParser.ParseJson(json);
         Assert.NotNull(result);
         return result!;
+    }
+
+    private static CpuProfileResult ParseSampled(string unit, string samplesJson, string weightsJson)
+    {
+        return Parse(CreateSpeedscopeJson($$"""
+            {
+              "type": "sampled",
+              "unit": "{{unit}}",
+              "samples": [
+                {{samplesJson}}
+              ],
+              "weights": [{{weightsJson}}]
+            }
+            """));
     }
 
     private static string CreateSpeedscopeJson(string profilesJson)
@@ -117,6 +104,23 @@ public sealed class SpeedscopeParserTests
               ]
             }
             """;
+    }
+
+    private static CallTreeNode AssertNode(CallTreeNode parent, string name, double expectedTotal, int expectedCalls)
+    {
+        var node = parent.Children.Values.Single(child => child.Name == name);
+        Assert.Equal(expectedTotal, node.Total, 3);
+        Assert.Equal(expectedCalls, node.Calls);
+        return node;
+    }
+
+    private static void AssertFunctions(CpuProfileResult result, params (string Name, double Time, int Calls)[] expectedFunctions)
+    {
+        foreach (var (name, time, calls) in expectedFunctions)
+        {
+            var sample = result.AllFunctions.Single(entry => entry.Name == name);
+            AssertFunction(sample, time, calls);
+        }
     }
 
     private static void AssertFunction(FunctionSample sample, double expectedTime, int expectedCalls)
