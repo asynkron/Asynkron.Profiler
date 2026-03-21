@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.IO;
-using System.Linq;
 using Spectre.Console;
-using static Asynkron.Profiler.CallTreeHelpers;
 
 namespace Asynkron.Profiler;
 
@@ -43,19 +40,12 @@ internal sealed class ProfileInputLoader
             return null;
         }
 
-        var extension = GetNormalizedExtension(inputPath);
-        if (extension == ".json")
+        return ProfileInputPath.GetKind(inputPath) switch
         {
-            return AnalyzeSpeedscope(inputPath);
-        }
-
-        if (!IsSupportedExtension(extension, ".nettrace", ".etlx"))
-        {
-            WriteUnsupportedInput("Unsupported CPU input", inputPath);
-            return null;
-        }
-
-        return AnalyzeCpuTrace(inputPath);
+            ProfileInputKind.Speedscope => AnalyzeSpeedscope(inputPath),
+            ProfileInputKind.NetTrace or ProfileInputKind.Etlx => AnalyzeCpuTrace(inputPath),
+            _ => WriteUnsupportedInputAndReturn<CpuProfileResult>("Unsupported CPU input", inputPath)
+        };
     }
 
     public MemoryProfileResult? LoadMemory(string inputPath)
@@ -66,7 +56,7 @@ internal sealed class ProfileInputLoader
         }
 
         var callTree = AnalyzeAllocationTrace(inputPath);
-        return callTree == null ? null : BuildMemoryProfileResult(callTree);
+        return callTree == null ? null : MemoryProfileResultFactory.Build(callTree);
     }
 
     public ExceptionProfileResult? LoadException(string inputPath)
@@ -96,170 +86,49 @@ internal sealed class ProfileInputLoader
             return null;
         }
 
-        var extension = GetNormalizedExtension(inputPath);
-        if (extension == ".gcdump")
+        return ProfileInputPath.GetKind(inputPath) switch
         {
-            if (!_ensureToolAvailable("dotnet-gcdump", _dotnetGcdumpInstallHint))
-            {
-                return null;
-            }
-
-            return GcdumpReportLoader.Load(
-                inputPath,
-                _getTheme(),
-                _runProcess,
-                _parseGcdumpReport,
-                _writeLine);
-        }
-
-        if (extension is ".txt" or ".log")
-        {
-            return _parseGcdumpReport(File.ReadAllText(inputPath));
-        }
-
-        WriteUnsupportedInput("Unsupported heap input", inputPath);
-        return null;
+            ProfileInputKind.Gcdump => LoadGcdump(inputPath),
+            ProfileInputKind.HeapReport => _parseGcdumpReport(File.ReadAllText(inputPath)),
+            _ => WriteUnsupportedInputAndReturn<HeapProfileResult>("Unsupported heap input", inputPath)
+        };
     }
 
     public CpuProfileResult? AnalyzeCpuTrace(string traceFile)
     {
-        try
+        var result = TryAnalyzeTrace(traceFile, "CPU trace parse failed", _traceAnalyzer.AnalyzeCpuTrace);
+        if (result == null)
         {
-            var result = _traceAnalyzer.AnalyzeCpuTrace(traceFile);
-            if (result.AllFunctions.Count == 0)
-            {
-                _writeLine($"[{_getTheme().AccentColor}]No CPU samples found in trace.[/]");
-                return null;
-            }
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _writeLine($"[{_getTheme().AccentColor}]CPU trace parse failed:[/] {Markup.Escape(ex.Message)}");
             return null;
         }
+
+        if (result.AllFunctions.Count == 0)
+        {
+            _writeLine($"[{_getTheme().AccentColor}]No CPU samples found in trace.[/]");
+            return null;
+        }
+
+        return result;
     }
 
     public AllocationCallTreeResult? AnalyzeAllocationTrace(string traceFile)
     {
-        try
-        {
-            return _traceAnalyzer.AnalyzeAllocationTrace(traceFile);
-        }
-        catch (Exception ex)
-        {
-            _writeLine($"[{_getTheme().AccentColor}]Allocation trace parse failed:[/] {Markup.Escape(ex.Message)}");
-            return null;
-        }
+        return TryAnalyzeTrace(traceFile, "Allocation trace parse failed", _traceAnalyzer.AnalyzeAllocationTrace);
     }
 
     public ExceptionProfileResult? AnalyzeExceptionTrace(string traceFile)
     {
-        try
-        {
-            return _traceAnalyzer.AnalyzeExceptionTrace(traceFile);
-        }
-        catch (Exception ex)
-        {
-            _writeLine($"[{_getTheme().AccentColor}]Exception trace parse failed:[/] {Markup.Escape(ex.Message)}");
-            return null;
-        }
+        return TryAnalyzeTrace(traceFile, "Exception trace parse failed", _traceAnalyzer.AnalyzeExceptionTrace);
     }
 
     public ContentionProfileResult? AnalyzeContentionTrace(string traceFile)
     {
-        try
-        {
-            return _traceAnalyzer.AnalyzeContentionTrace(traceFile);
-        }
-        catch (Exception ex)
-        {
-            _writeLine($"[{_getTheme().AccentColor}]Contention trace parse failed:[/] {Markup.Escape(ex.Message)}");
-            return null;
-        }
-    }
-
-    public static MemoryProfileResult BuildMemoryProfileResult(AllocationCallTreeResult callTree)
-    {
-        var allocationEntries = callTree.TypeRoots
-            .OrderByDescending(root => root.TotalBytes)
-            .Take(50)
-            .Select(root => new AllocationEntry(root.Name, root.Count, FormatBytes(root.TotalBytes)))
-            .ToList();
-
-        var totalAllocated = FormatBytes(callTree.TotalBytes);
-
-        return new MemoryProfileResult(
-            null,
-            null,
-            null,
-            totalAllocated,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            totalAllocated,
-            allocationEntries,
-            callTree,
-            null,
-            null);
-    }
-
-    public static string BuildInputLabel(string inputPath)
-    {
-        return FileLabelSanitizer.Sanitize(Path.GetFileNameWithoutExtension(inputPath), "input");
-    }
-
-    public static void ApplyInputDefaults(
-        string inputPath,
-        ref bool runCpu,
-        ref bool runMemory,
-        ref bool runHeap,
-        ref bool runException,
-        ref bool runContention)
-    {
-        switch (GetNormalizedExtension(inputPath))
-        {
-            case ".json":
-                runCpu = true;
-                break;
-            case ".nettrace":
-                runCpu = true;
-                runException = true;
-                runContention = true;
-                break;
-            case ".etlx":
-                runMemory = true;
-                runException = true;
-                runContention = true;
-                break;
-            case ".gcdump":
-            case ".txt":
-            case ".log":
-                runHeap = true;
-                break;
-            default:
-                runCpu = true;
-                break;
-        }
+        return TryAnalyzeTrace(traceFile, "Contention trace parse failed", _traceAnalyzer.AnalyzeContentionTrace);
     }
 
     private CpuProfileResult? AnalyzeSpeedscope(string speedscopePath)
     {
-        try
-        {
-            return ProfilerTraceAnalyzer.AnalyzeSpeedscope(speedscopePath);
-        }
-        catch (Exception ex)
-        {
-            _writeLine($"[{_getTheme().AccentColor}]Speedscope parse failed:[/] {Markup.Escape(ex.Message)}");
-            return null;
-        }
+        return TryAnalyzeTrace(speedscopePath, "Speedscope parse failed", ProfilerTraceAnalyzer.AnalyzeSpeedscope);
     }
 
     private bool TryValidateTraceInput(string inputPath, string unsupportedMessage)
@@ -269,13 +138,28 @@ internal sealed class ProfileInputLoader
             return false;
         }
 
-        if (IsSupportedExtension(GetNormalizedExtension(inputPath), ".nettrace", ".etlx"))
+        if (ProfileInputPath.IsTraceInput(inputPath))
         {
             return true;
         }
 
         WriteUnsupportedInput(unsupportedMessage, inputPath);
         return false;
+    }
+
+    private HeapProfileResult? LoadGcdump(string inputPath)
+    {
+        if (!_ensureToolAvailable("dotnet-gcdump", _dotnetGcdumpInstallHint))
+        {
+            return null;
+        }
+
+        return GcdumpReportLoader.Load(
+            inputPath,
+            _getTheme(),
+            _runProcess,
+            _parseGcdumpReport,
+            _writeLine);
     }
 
     private bool TryEnsureInputExists(string inputPath)
@@ -294,13 +178,24 @@ internal sealed class ProfileInputLoader
         _writeLine($"[{_getTheme().ErrorColor}]{message}:[/] {Markup.Escape(inputPath)}");
     }
 
-    private static string GetNormalizedExtension(string inputPath)
+    private T? TryAnalyzeTrace<T>(string path, string failureMessage, Func<string, T> analyze)
+        where T : class
     {
-        return Path.GetExtension(inputPath).ToLowerInvariant();
+        try
+        {
+            return analyze(path);
+        }
+        catch (Exception ex)
+        {
+            _writeLine($"[{_getTheme().AccentColor}]{failureMessage}[/] {Markup.Escape(ex.Message)}");
+            return null;
+        }
     }
 
-    private static bool IsSupportedExtension(string extension, params string[] allowedExtensions)
+    private T? WriteUnsupportedInputAndReturn<T>(string message, string inputPath)
+        where T : class
     {
-        return allowedExtensions.Contains(extension, StringComparer.Ordinal);
+        WriteUnsupportedInput(message, inputPath);
+        return null;
     }
 }

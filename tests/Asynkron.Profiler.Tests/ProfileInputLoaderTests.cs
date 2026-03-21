@@ -9,40 +9,6 @@ namespace Asynkron.Profiler.Tests;
 public sealed class ProfileInputLoaderTests
 {
     [Fact]
-    public void ApplyInputDefaults_MapsExtensionsToExpectedModes()
-    {
-        AssertModes("trace.json", expectedCpu: true, expectedMemory: false, expectedHeap: false, expectedException: false, expectedContention: false);
-        AssertModes("trace.nettrace", expectedCpu: true, expectedMemory: false, expectedHeap: false, expectedException: true, expectedContention: true);
-        AssertModes("trace.etlx", expectedCpu: false, expectedMemory: true, expectedHeap: false, expectedException: true, expectedContention: true);
-        AssertModes("trace.gcdump", expectedCpu: false, expectedMemory: false, expectedHeap: true, expectedException: false, expectedContention: false);
-        AssertModes("trace.unknown", expectedCpu: true, expectedMemory: false, expectedHeap: false, expectedException: false, expectedContention: false);
-    }
-
-    [Fact]
-    public void BuildMemoryProfileResult_SortsEntriesAndCapsAtFifty()
-    {
-        var loader = CreateLoader((_, _) => true);
-        var roots = Enumerable.Range(0, 55)
-            .Select(index => new AllocationCallTreeNode($"Type{index}")
-            {
-                Count = index + 1,
-                TotalBytes = index + 1
-            })
-            .ToArray();
-        var callTree = new AllocationCallTreeResult(roots.Sum(root => root.TotalBytes), roots.Sum(root => root.Count), roots);
-
-        var result = ProfileInputLoader.BuildMemoryProfileResult(callTree);
-
-        Assert.Equal("1.50 KB", result.TotalAllocated);
-        Assert.Equal("1.50 KB", result.AllocationTotal);
-        Assert.Same(callTree, result.AllocationCallTree);
-        Assert.Equal(50, result.AllocationEntries.Count);
-        Assert.Equal("Type54", result.AllocationEntries[0].Type);
-        Assert.Equal("55 B", result.AllocationEntries[0].Total);
-        Assert.Equal("Type5", result.AllocationEntries[^1].Type);
-    }
-
-    [Fact]
     public void LoadHeap_UsesGcdumpLoaderWhenToolIsAvailable()
     {
         var messages = new List<string>();
@@ -98,43 +64,6 @@ public sealed class ProfileInputLoaderTests
         {
             File.Delete(unsupportedPath);
         }
-    }
-
-    [Fact]
-    public void BuildInputLabel_FallsBackToInputWhenFileNameIsMissing()
-    {
-        var label = ProfileInputLoader.BuildInputLabel(string.Empty);
-
-        Assert.Equal("input", label);
-    }
-
-    private static void AssertModes(
-        string inputPath,
-        bool expectedCpu,
-        bool expectedMemory,
-        bool expectedHeap,
-        bool expectedException,
-        bool expectedContention)
-    {
-        var runCpu = false;
-        var runMemory = false;
-        var runHeap = false;
-        var runException = false;
-        var runContention = false;
-
-        ProfileInputLoader.ApplyInputDefaults(
-            inputPath,
-            ref runCpu,
-            ref runMemory,
-            ref runHeap,
-            ref runException,
-            ref runContention);
-
-        Assert.Equal(expectedCpu, runCpu);
-        Assert.Equal(expectedMemory, runMemory);
-        Assert.Equal(expectedHeap, runHeap);
-        Assert.Equal(expectedException, runException);
-        Assert.Equal(expectedContention, runContention);
     }
 
     private static ProfileInputLoader CreateLoader(
