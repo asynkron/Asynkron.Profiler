@@ -37,13 +37,13 @@ internal sealed class ProfilerExecutionRequestFactory
 
         if (hasInput)
         {
-            label = ProfileInputLoader.BuildInputLabel(invocation.InputPath!);
+            label = ProfileInputLabelFactory.Build(invocation.InputPath!);
             description = invocation.InputPath!;
             command = Array.Empty<string>();
 
             if (!hasExplicitModes)
             {
-                ProfileInputLoader.ApplyInputDefaults(
+                ProfileInputDefaultsPolicy.Apply(
                     invocation.InputPath!,
                     ref runCpu,
                     ref runMemory,
